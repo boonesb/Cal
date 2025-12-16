@@ -18,6 +18,8 @@ export const getFirebaseApp = () => {
     Object.entries(firebaseConfig).forEach(([key, value]) => {
       if (!value) {
         console.warn(`Missing Firebase config value for ${key}.`);
+        console.log("Firebase projectId (live):", app.options.projectId);
+        console.log("Firebase authDomain (live):", app.options.authDomain);
       }
     });
     app = initializeApp(firebaseConfig);
