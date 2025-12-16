@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "firebase": "^10.14.0"
+    "firebase": "^10.14.1",
+    "firebase-tools": "^15.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.8.1",

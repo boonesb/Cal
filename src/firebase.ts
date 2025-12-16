@@ -33,3 +33,5 @@ const a = getFirebaseApp();
 console.log("Firebase projectId (live):", a.options.projectId);
 console.log("Firebase authDomain (live):", a.options.authDomain);
 
+console.log("LIVE projectId:", a.options.projectId);
+console.log("LIVE authDomain:", a.options.authDomain);

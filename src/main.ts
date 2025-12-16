@@ -113,7 +113,13 @@ const sortFoodsForPicker = (foods: Food[], term: string) => {
 
 const fetchEntriesForDate = async (date: string): Promise<Entry[]> => {
   if (!state.user) return [];
+
+  console.log("state.user.uid:", state.user.uid);
+  console.log("auth.currentUser.uid:", auth.currentUser?.uid);
+  
   const entryCol = collection(db, 'users', state.user.uid, 'entries', date, 'items');
+  console.log("state.user.uid:", state.user?.uid);
+  console.log("auth.currentUser.uid:", auth.currentUser?.uid);
   const entriesSnapshot = await getDocs(query(entryCol, orderBy('createdAt')));
   return entriesSnapshot.docs.map((docSnap) => ({
     id: docSnap.id,
