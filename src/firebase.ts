@@ -27,3 +27,7 @@ export const getFirebaseApp = () => {
 
 export const auth = getAuth(getFirebaseApp());
 export const db = getFirestore(getFirebaseApp());
+const a = getFirebaseApp();
+console.log("Firebase projectId (live):", a.options.projectId);
+console.log("Firebase authDomain (live):", a.options.authDomain);
+
