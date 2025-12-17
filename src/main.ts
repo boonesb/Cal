@@ -735,8 +735,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     if (!suggestionEl) return;
     const filtered = sortFoodsForPicker(foods, term);
     if (filtered.length === 0 && term.trim()) {
-      suggestionEl.innerHTML = `<div class="food-suggestions"><button id="create-food-inline">Create "${term}"</button></div>`;
-      suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', () => {
+      suggestionEl.innerHTML = `<div class="food-suggestions"><button type="button" id="create-food-inline">Create "${term}"</button></div>`;
+      suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
         const inlineContainer = entryForm.querySelector<HTMLDivElement>('#inline-food-form');
         if (!inlineContainer) return;
         renderFoodForm({
