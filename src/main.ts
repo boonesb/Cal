@@ -677,6 +677,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         <button id="back-dashboard" class="secondary">Back</button>
       </div>
       <form id="entry-form" class="form-grid"></form>
+      <div id="inline-food-form"></div>
     </section>
   `;
   container.querySelector('#back-dashboard')?.addEventListener('click', () => renderDashboard());
@@ -739,7 +740,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-        const inlineContainer = entryForm.querySelector<HTMLDivElement>('#inline-food-form');
+        const inlineContainer = container.querySelector<HTMLDivElement>('#inline-food-form');
         if (!inlineContainer) return;
         renderFoodForm({
           container: inlineContainer,
@@ -788,7 +789,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       <label for="food">Food</label>
       <input id="food" name="food" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
       <div id="food-suggestions"></div>
-      <div id="inline-food-form"></div>
     </div>
     <div>
       <label for="servings">Servings</label>
