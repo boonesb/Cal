@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "your-project-id"
-  }
+    "default": "your-project-id",
+    "live": "calo-68971"
+  },
+  "targets": {},
+  "etags": {}
 }

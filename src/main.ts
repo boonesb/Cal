@@ -98,13 +98,16 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
   if (!USDA_API_KEY) {
     throw new Error('Add VITE_USDA_API_KEY to use USDA lookups.');
   }
-  const response = await fetch('https://api.nal.usda.gov/fdc/v1/foods/search', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ query: term, pageSize: 5 }),
-  });
+const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
+url.searchParams.set('api_key', USDA_API_KEY);
+
+const response = await fetch(url.toString(), {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({ query: term, pageSize: 5 }),
+});
   if (!response.ok) {
     throw new Error('Unable to fetch USDA results right now.');
   }
@@ -113,10 +116,13 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
 
   return data.foods.map((food: any) => {
     const nutrients = food.foodNutrients || [];
-    const findNutrient = (nutrientNumber: string) => {
-      const nutrient = nutrients.find((n: any) => String(n.nutrientNumber) === nutrientNumber);
-      return Number(nutrient?.value ?? 0);
-    };
+    const findNutrient = (id: string) => {
+  const nutrient = nutrients.find((n: any) => {
+    const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
+    return String(nid) === id;
+  });
+  return Number(nutrient?.value ?? nutrient?.amount ?? 0);
+};
     return {
       id: String(food.fdcId ?? food.description),
       description: String(food.description ?? 'Food'),
@@ -142,9 +148,10 @@ const getUserFoods = async () => {
 
 const sortFoodsForPicker = (foods: Food[], term: string) => {
   const keyword = term.trim().toLowerCase();
-  const matches = foods.filter((food) =>
-    keyword === '' ? true : food.name.toLowerCase().includes(keyword)
-  );
+  const matches = foods.filter((food) => {
+  if (keyword === '') return food.favorite;
+  return food.name.toLowerCase().includes(keyword);
+});
   return matches.sort((a, b) => {
     if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
     const aIndex = a.name.toLowerCase().indexOf(keyword);
