@@ -228,6 +228,28 @@ input[type='date'] {
   border-bottom: 1px solid #e2e8f0;
 }
 
+@media (max-width: 640px) {
+  .table-like.header {
+    display: none;
+  }
+
+  .table-like {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid #e2e8f0;
+    align-items: start;
+  }
+
+  .table-like .entry-actions {
+    margin-top: 0.5rem;
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+}
+
+
 @media (max-width: 720px) {
   .table-like,
   .table-like.header {
