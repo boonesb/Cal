@@ -32,7 +32,13 @@ VITE_FIREBASE_PROJECT_ID=your-project-id
 VITE_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=sender-id
 VITE_FIREBASE_APP_ID=app-id
+VITE_USDA_API_KEY=your-usda-api-key
 ```
+
+### USDA FoodData Central lookup (optional)
+- Create a free developer account at [https://fdc.nal.usda.gov/api-key-signup.html](https://fdc.nal.usda.gov/api-key-signup.html).
+- Copy the issued key and set `VITE_USDA_API_KEY` in your `.env.local`.
+- The app uses this key when you click "Lookup nutrition" while creating or editing foods.
 
 ### Run locally
 ```bash

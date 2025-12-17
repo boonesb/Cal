@@ -50,6 +50,8 @@ type Entry = {
   createdAt?: string;
 };
 
+const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
+
 const state: {
   user: User | null;
   selectedDate: string;
@@ -83,6 +85,47 @@ const resetInactivityTimer = () => {
 });
 
 const formatNumber = (num: number) => Math.round(num * 100) / 100;
+
+type UsdaFoodResult = {
+  id: string;
+  description: string;
+  calories: number;
+  carbs: number;
+  protein: number;
+};
+
+const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
+  if (!USDA_API_KEY) {
+    throw new Error('Add VITE_USDA_API_KEY to use USDA lookups.');
+  }
+  const response = await fetch('https://api.nal.usda.gov/fdc/v1/foods/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: term, pageSize: 5 }),
+  });
+  if (!response.ok) {
+    throw new Error('Unable to fetch USDA results right now.');
+  }
+  const data = await response.json();
+  if (!data?.foods?.length) return [];
+
+  return data.foods.map((food: any) => {
+    const nutrients = food.foodNutrients || [];
+    const findNutrient = (nutrientNumber: string) => {
+      const nutrient = nutrients.find((n: any) => String(n.nutrientNumber) === nutrientNumber);
+      return Number(nutrient?.value ?? 0);
+    };
+    return {
+      id: String(food.fdcId ?? food.description),
+      description: String(food.description ?? 'Food'),
+      calories: findNutrient('1008'),
+      carbs: findNutrient('1005'),
+      protein: findNutrient('1003'),
+    } as UsdaFoodResult;
+  });
+};
 
 const getUserFoods = async () => {
   if (!state.user) return [] as Food[];
@@ -395,6 +438,12 @@ const renderFoodForm = (options: {
       <p class="small-text">Editing foods will not change past entries.</p>
     </div>
     <div>
+      <button type="button" id="lookup-nutrition">Lookup nutrition</button>
+      <p class="small-text">Uses USDA FoodData Central; values may be per 100g—adjust per serving.</p>
+      <div id="lookup-error" class="error-text"></div>
+      <div id="lookup-results" class="food-suggestions"></div>
+    </div>
+    <div>
       <label for="calories">Calories / serving</label>
       <input id="calories" name="caloriesPerServing" type="number" min="0" required value="${
         food?.caloriesPerServing ?? ''
@@ -438,6 +487,64 @@ const renderFoodForm = (options: {
     const id = await upsertFood(payload);
     const savedFood = { ...payload, id } as Food;
     onSave(savedFood);
+  });
+
+  const nameInput = form.querySelector<HTMLInputElement>('#food-name');
+  const caloriesInput = form.querySelector<HTMLInputElement>('#calories');
+  const carbsInput = form.querySelector<HTMLInputElement>('#carbs');
+  const proteinInput = form.querySelector<HTMLInputElement>('#protein');
+  const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
+  const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
+  const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
+
+  const renderLookupResults = (results: UsdaFoodResult[]) => {
+    if (!lookupResults) return;
+    lookupResults.innerHTML = '';
+    results.forEach((result) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.innerHTML = `<strong>${result.description}</strong><div class="small-text">${formatNumber(
+        result.calories
+      )} kcal • ${formatNumber(result.carbs)} g carbs • ${formatNumber(result.protein)} g protein</div>`;
+      btn.addEventListener('click', () => {
+        if (caloriesInput) caloriesInput.value = String(result.calories || 0);
+        if (carbsInput) carbsInput.value = String(result.carbs || 0);
+        if (proteinInput) proteinInput.value = String(result.protein || 0);
+        lookupResults.innerHTML = '';
+      });
+      lookupResults.appendChild(btn);
+    });
+  };
+
+  lookupBtn?.addEventListener('click', async () => {
+    if (!nameInput || !lookupError || !lookupResults || !lookupBtn) return;
+    const term = nameInput.value.trim();
+    lookupError.textContent = '';
+    lookupResults.innerHTML = '';
+    if (!term) {
+      lookupError.textContent = 'Enter a food name to search.';
+      return;
+    }
+    if (!USDA_API_KEY) {
+      lookupError.textContent = 'USDA API key missing. Add VITE_USDA_API_KEY to your .env.';
+      return;
+    }
+    lookupBtn.disabled = true;
+    const originalText = lookupBtn.textContent;
+    lookupBtn.textContent = 'Looking up...';
+    try {
+      const results = await searchUsdaFoods(term);
+      if (!results.length) {
+        lookupError.textContent = 'No matches found.';
+        return;
+      }
+      renderLookupResults(results);
+    } catch (err: any) {
+      lookupError.textContent = err?.message ?? 'Lookup failed. Try again later.';
+    } finally {
+      lookupBtn.disabled = false;
+      lookupBtn.textContent = originalText;
+    }
   });
 
   container.innerHTML = '';
@@ -578,6 +685,14 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   let perServing = { calories: 0, carbs: 0, protein: 0 };
   let typedName = '';
 
+  const normalizeServingsInput = (value: string) => {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 1) {
+      return Math.floor(parsed);
+    }
+    return 1;
+  };
+
   if (entryId && state.user) {
     const entryRef = doc(db, 'users', state.user.uid, 'entries', date, 'items', entryId);
     const entrySnap = await getDoc(entryRef);
@@ -668,7 +783,16 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     </div>
     <div>
       <label for="servings">Servings</label>
-      <input id="servings" name="servings" type="number" min="1" value="${servings}" required />
+      <input
+        id="servings"
+        name="servings"
+        type="text"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        placeholder="e.g., 1"
+        value="${servings}"
+        required
+      />
     </div>
     <div>
       <label for="calories">Calories per serving</label>
@@ -709,11 +833,16 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     })
   );
 
-  entryForm.querySelector<HTMLInputElement>('#servings')?.addEventListener('input', (e) => {
-    servings = Math.max(1, Math.floor(Number((e.target as HTMLInputElement).value || 1)));
-    (e.target as HTMLInputElement).value = String(servings);
+  const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
+  const syncServingsInput = () => {
+    if (!servingsInput) return;
+    servings = normalizeServingsInput(servingsInput.value || '1');
+    servingsInput.value = String(servings);
     updateTotals();
-  });
+  };
+
+  servingsInput?.addEventListener('input', syncServingsInput);
+  servingsInput?.addEventListener('blur', syncServingsInput);
 
   entryForm.querySelector('#cancel-edit')?.addEventListener('click', () => renderDashboard());
 
@@ -734,6 +863,20 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       proteinPerServing: perServing.protein,
       createdAt: serverTimestamp(),
     };
+
+    const normalizedFoodName = foodName.toLowerCase();
+    const existingFood = state.foodCache.find(
+      (food) => food.name.trim().toLowerCase() === normalizedFoodName
+    );
+    if (!existingFood) {
+      await upsertFood({
+        name: foodName,
+        caloriesPerServing: perServing.calories,
+        carbsPerServing: perServing.carbs,
+        proteinPerServing: perServing.protein,
+        favorite: false,
+      });
+    }
     if (entryId) {
       const entryRef = doc(db, 'users', state.user.uid, 'entries', date, 'items', entryId);
       await setDoc(entryRef, payload, { merge: true });
