@@ -110,12 +110,21 @@ label {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  .navbar {
+    flex-wrap: wrap;
+  }
 }
 
 .navbar {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+.navbar button.active {
+  background: #0f766e;
+  color: #fff;
 }
 
 .list {
@@ -131,6 +140,10 @@ label {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+.list li.entry-row {
+  display: grid;
 }
 
 .badge {
@@ -175,6 +188,27 @@ label {
   gap: 0.25rem;
 }
 
+.entry-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.entry-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.chips {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .chip {
   padding: 0.25rem 0.5rem;
   background: #e2e8f0;
@@ -184,6 +218,20 @@ label {
 
 input[type='date'] {
   max-width: 220px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.date-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .food-suggestions {
@@ -246,6 +294,44 @@ input[type='date'] {
     display: flex;
     gap: 0.5rem;
     flex-wrap: wrap;
+  }
+
+  .dashboard-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .date-controls {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .date-controls input[type='date'] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .entry-row {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-meta {
+    align-items: flex-start;
+  }
+
+  .chips {
+    justify-content: flex-start;
+  }
+
+  .entry-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .entry-actions button {
+    flex: 1;
   }
 }
 

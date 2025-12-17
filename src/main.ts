@@ -52,17 +52,21 @@ type Entry = {
 
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 
+type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
+
 const state: {
   user: User | null;
   selectedDate: string;
+  view: View;
   foodCache: Food[];
   entryFormFoodCacheLoaded: boolean;
   inactivityTimer: number | null;
-  entryReturnContext: { date: string; entryId?: string } | null;
+  entryReturnContext: { date: string } | null;
   prefillFoodId?: string;
 } = {
   user: null,
   selectedDate: todayStr(),
+  view: 'dashboard',
   foodCache: [],
   entryFormFoodCacheLoaded: false,
   inactivityTimer: null,
@@ -163,13 +167,7 @@ const sortFoodsForPicker = (foods: Food[], term: string) => {
 
 const fetchEntriesForDate = async (date: string): Promise<Entry[]> => {
   if (!state.user) return [];
-
-  console.log("state.user.uid:", state.user.uid);
-  console.log("auth.currentUser.uid:", auth.currentUser?.uid);
-  
   const entryCol = collection(db, 'users', state.user.uid, 'entries', date, 'items');
-  console.log("state.user.uid:", state.user?.uid);
-  console.log("auth.currentUser.uid:", auth.currentUser?.uid);
   const entriesSnapshot = await getDocs(query(entryCol, orderBy('createdAt')));
   return entriesSnapshot.docs.map((docSnap) => ({
     id: docSnap.id,
@@ -251,15 +249,19 @@ const renderLogin = () => {
 };
 
 const renderNav = () => {
+  const activeClass = (view: View | View[]) => {
+    const views = Array.isArray(view) ? view : [view];
+    return views.includes(state.view) ? 'active' : '';
+  };
   const header = document.createElement('header');
   const title = document.createElement('h1');
   title.textContent = 'Calorie Tracker';
   const nav = document.createElement('div');
   nav.className = 'navbar';
   nav.innerHTML = `
-    <button id="nav-dashboard">Dashboard</button>
-    <button class="secondary" id="nav-foods">Foods</button>
-    <button class="secondary" id="nav-add-entry">Add entry</button>
+    <button id="nav-dashboard" class="${activeClass('dashboard')}">Dashboard</button>
+    <button class="secondary ${activeClass('foods')}" id="nav-foods">Foods</button>
+    <button class="secondary ${activeClass(['add-entry', 'edit-entry'])}" id="nav-add-entry">Add entry</button>
     <button class="secondary" id="nav-signout">Sign out</button>
   `;
   header.appendChild(title);
@@ -288,15 +290,16 @@ const renderTotals = (entries: Entry[]) => {
 };
 
 const renderDashboard = async () => {
+  state.view = 'dashboard';
   const container = buildShell();
   container.innerHTML = `
     <section class="card">
-      <div class="flex space-between">
+      <div class="dashboard-header">
         <div>
           <p class="small-text">Daily dashboard</p>
           <h2 id="selected-date">${state.selectedDate}</h2>
         </div>
-        <div class="flex">
+        <div class="date-controls">
           <button id="prev-day" class="secondary">◀</button>
           <input type="date" id="date-picker" value="${state.selectedDate}" />
           <button id="next-day" class="secondary">▶</button>
@@ -359,17 +362,21 @@ const renderDashboard = async () => {
       const carbs = entry.servings * entry.carbsPerServing;
       const protein = entry.servings * entry.proteinPerServing;
       return `
-        <li>
-          <div>
+        <li class="entry-row">
+          <div class="entry-main">
             <strong>${entry.foodName}</strong>
             <div class="small-text">${entry.servings} serving(s)</div>
           </div>
-          <div class="entry-actions">
-            <div class="chip">${formatNumber(calories)} kcal</div>
-            <div class="chip">${formatNumber(carbs)} g carbs</div>
-            <div class="chip">${formatNumber(protein)} g protein</div>
-            <button class="secondary" data-edit="${entry.id}">Edit</button>
-            <button class="danger" data-delete="${entry.id}">Delete</button>
+          <div class="entry-meta">
+            <div class="chips">
+              <div class="chip">${formatNumber(calories)} kcal</div>
+              <div class="chip">${formatNumber(carbs)} g carbs</div>
+              <div class="chip">${formatNumber(protein)} g protein</div>
+            </div>
+            <div class="entry-actions">
+              <button class="secondary" data-edit="${entry.id}">Edit</button>
+              <button class="danger" data-delete="${entry.id}">Delete</button>
+            </div>
           </div>
         </li>
       `;
@@ -558,7 +565,57 @@ const renderFoodForm = (options: {
   container.appendChild(form);
 };
 
+const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string }) => {
+  state.view = 'add-food';
+  if (!state.entryFormFoodCacheLoaded) {
+    await getUserFoods();
+  }
+  const container = buildShell();
+  container.innerHTML = `
+    <section class="card">
+      <div class="flex space-between">
+        <div>
+          <p class="small-text">${options?.prefillName ? 'Create food' : 'Add food'}</p>
+          <h2>Add food</h2>
+        </div>
+        <button id="back-from-food" class="secondary">Back</button>
+      </div>
+      <div id="add-food-form"></div>
+    </section>
+  `;
+
+  const goBack = () => {
+    if (options?.returnDate) {
+      renderEntryForm({ date: options.returnDate });
+      return;
+    }
+    renderFoods();
+  };
+
+  container.querySelector('#back-from-food')?.addEventListener('click', goBack);
+
+  const host = container.querySelector<HTMLDivElement>('#add-food-form');
+  if (!host) return;
+
+  renderFoodForm({
+    container: host,
+    prefillName: options?.prefillName,
+    onSave: (food) => {
+      state.prefillFoodId = food.id;
+      if (!state.foodCache.find((f) => f.id === food.id)) {
+        state.foodCache.push(food);
+      }
+      if (options?.returnDate) {
+        renderEntryForm({ date: options.returnDate });
+      } else {
+        renderFoods();
+      }
+    },
+  });
+};
+
 const renderFoods = async () => {
+  state.view = 'foods';
   const container = buildShell();
   container.innerHTML = `
     <section class="card">
@@ -569,13 +626,9 @@ const renderFoods = async () => {
         </div>
         <button id="create-food">Add food</button>
       </div>
-      <div id="food-form"></div>
       <div id="food-list" class="card"></div>
     </section>
   `;
-
-  const foodFormContainer = container.querySelector('#food-form');
-  if (!foodFormContainer) return;
 
   const renderList = (foods: Food[]) => {
     const listEl = container.querySelector('#food-list');
@@ -653,10 +706,7 @@ const renderFoods = async () => {
   };
 
   container.querySelector('#create-food')?.addEventListener('click', () => {
-    renderFoodForm({
-      container: foodFormContainer,
-      onSave: () => renderFoods(),
-    });
+    renderAddFoodView();
   });
 
   const foods = state.foodCache.length ? state.foodCache : await getUserFoods();
@@ -665,7 +715,9 @@ const renderFoods = async () => {
 
 const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const { date, entryId } = options;
-  state.entryReturnContext = options;
+  state.entryReturnContext = { date };
+  state.view = entryId ? 'edit-entry' : 'add-entry';
+  state.selectedDate = date;
   const container = buildShell();
   container.innerHTML = `
     <section class="card">
@@ -677,7 +729,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         <button id="back-dashboard" class="secondary">Back</button>
       </div>
       <form id="entry-form" class="form-grid"></form>
-      <div id="inline-food-form"></div>
     </section>
   `;
   container.querySelector('#back-dashboard')?.addEventListener('click', () => renderDashboard());
@@ -692,6 +743,20 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   let servings = 1;
   let perServing = { calories: 0, carbs: 0, protein: 0 };
   let typedName = '';
+
+  if (state.prefillFoodId) {
+    const prefill = foods.find((f) => f.id === state.prefillFoodId);
+    if (prefill) {
+      selectedFood = prefill;
+      typedName = prefill.name;
+      perServing = {
+        calories: prefill.caloriesPerServing,
+        carbs: prefill.carbsPerServing,
+        protein: prefill.proteinPerServing,
+      };
+    }
+    state.prefillFoodId = undefined;
+  }
 
   const normalizeServingsInput = (value: string) => {
     const parsed = Number(value);
@@ -738,27 +803,9 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     if (filtered.length === 0 && term.trim()) {
       suggestionEl.innerHTML = `<div class="food-suggestions"><button type="button" id="create-food-inline">Create "${term}"</button></div>`;
       suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-        const inlineContainer = container.querySelector<HTMLDivElement>('#inline-food-form');
-        if (!inlineContainer) return;
-        renderFoodForm({
-          container: inlineContainer,
-          prefillName: term,
-          onSave: (newFood) => {
-            state.foodCache.push(newFood);
-            selectedFood = newFood;
-            (entryForm.querySelector<HTMLInputElement>('#food') || {}).value = newFood.name;
-            perServing = {
-              calories: newFood.caloriesPerServing,
-              carbs: newFood.carbsPerServing,
-              protein: newFood.proteinPerServing,
-            };
-            renderFoodSuggestions(newFood.name);
-            inlineContainer.innerHTML = '';
-            updateTotals();
-          },
-        });
+        e.preventDefault();
+        e.stopPropagation();
+        renderAddFoodView({ prefillName: term, returnDate: date });
       });
       return;
     }
