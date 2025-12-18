@@ -29,7 +29,17 @@ if (!appEl) {
   throw new Error('Missing app container');
 }
 
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const toDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const todayStr = () => {
+  const now = new Date();
+  return toDateInputValue(now);
+};
 
 type Food = {
   id: string;
@@ -53,11 +63,13 @@ type Entry = {
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
+type ActiveView = 'dashboard' | 'foods' | 'add-entry' | 'add-food';
 
 const state: {
   user: User | null;
   selectedDate: string;
   view: View;
+  activeView: ActiveView;
   foodCache: Food[];
   entryFormFoodCacheLoaded: boolean;
   inactivityTimer: number | null;
@@ -67,6 +79,7 @@ const state: {
   user: null,
   selectedDate: todayStr(),
   view: 'dashboard',
+  activeView: 'dashboard',
   foodCache: [],
   entryFormFoodCacheLoaded: false,
   inactivityTimer: null,
@@ -90,6 +103,31 @@ const resetInactivityTimer = () => {
 
 const formatNumber = (num: number) => Math.round(num * 100) / 100;
 
+const parseDecimal2 = (raw: string, min: number) => {
+  const sanitized = raw.replace(/[^0-9.]/g, '');
+  const [whole, ...rest] = sanitized.split('.');
+  const decimals = rest.join('');
+  const normalized = `${whole || '0'}${decimals ? `.${decimals.slice(0, 2)}` : ''}`;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return min;
+  const rounded = Math.round(parsed * 100) / 100;
+  return Math.max(min, rounded);
+};
+
+const renderMacroChips = (macros: { calories: number; carbs: number; protein: number }) => `
+  <div class="chip-row">
+    <div class="chip macro-chip"><span class="chip-label">kcal</span><span class="chip-value">${formatNumber(
+      macros.calories
+    ).toFixed(2)}</span></div>
+    <div class="chip macro-chip"><span class="chip-label">carbs</span><span class="chip-value">${formatNumber(
+      macros.carbs
+    ).toFixed(2)} g</span></div>
+    <div class="chip macro-chip"><span class="chip-label">protein</span><span class="chip-value">${formatNumber(
+      macros.protein
+    ).toFixed(2)} g</span></div>
+  </div>
+`;
+
 type UsdaFoodResult = {
   id: string;
   description: string;
@@ -102,16 +140,16 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
   if (!USDA_API_KEY) {
     throw new Error('Add VITE_USDA_API_KEY to use USDA lookups.');
   }
-const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
-url.searchParams.set('api_key', USDA_API_KEY);
+  const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
+  url.searchParams.set('api_key', USDA_API_KEY);
 
-const response = await fetch(url.toString(), {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({ query: term, pageSize: 5 }),
-});
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: term, pageSize: 5 }),
+  });
   if (!response.ok) {
     throw new Error('Unable to fetch USDA results right now.');
   }
@@ -121,12 +159,12 @@ const response = await fetch(url.toString(), {
   return data.foods.map((food: any) => {
     const nutrients = food.foodNutrients || [];
     const findNutrient = (id: string) => {
-  const nutrient = nutrients.find((n: any) => {
-    const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
-    return String(nid) === id;
-  });
-  return Number(nutrient?.value ?? nutrient?.amount ?? 0);
-};
+      const nutrient = nutrients.find((n: any) => {
+        const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
+        return String(nid) === id;
+      });
+      return Number(nutrient?.value ?? nutrient?.amount ?? 0);
+    };
     return {
       id: String(food.fdcId ?? food.description),
       description: String(food.description ?? 'Food'),
@@ -153,9 +191,9 @@ const getUserFoods = async () => {
 const sortFoodsForPicker = (foods: Food[], term: string) => {
   const keyword = term.trim().toLowerCase();
   const matches = foods.filter((food) => {
-  if (keyword === '') return food.favorite;
-  return food.name.toLowerCase().includes(keyword);
-});
+    if (keyword === '') return food.favorite;
+    return food.name.toLowerCase().includes(keyword);
+  });
   return matches.sort((a, b) => {
     if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
     const aIndex = a.name.toLowerCase().indexOf(keyword);
@@ -251,7 +289,7 @@ const renderLogin = () => {
 const renderNav = () => {
   const activeClass = (view: View | View[]) => {
     const views = Array.isArray(view) ? view : [view];
-    return views.includes(state.view) ? 'active' : '';
+    return views.includes(state.activeView) ? 'active' : '';
   };
   const header = document.createElement('header');
   const title = document.createElement('h1');
@@ -278,22 +316,32 @@ const buildShell = () => {
   return main;
 };
 
+const setActiveView = (view: ActiveView) => {
+  state.activeView = view;
+};
+
 const renderTotals = (entries: Entry[]) => {
   const totals = sumEntries(entries);
   return `
     <div class="totals">
-      <div class="total-card"><div class="small-text">Calories</div><div class="chip">${formatNumber(totals.calories)}</div></div>
-      <div class="total-card"><div class="small-text">Carbs (g)</div><div class="chip">${formatNumber(totals.carbs)}</div></div>
-      <div class="total-card"><div class="small-text">Protein (g)</div><div class="chip">${formatNumber(totals.protein)}</div></div>
+      <div class="total-card">
+        <div class="small-text">Daily totals</div>
+        ${renderMacroChips({
+          calories: totals.calories,
+          carbs: totals.carbs,
+          protein: totals.protein,
+        })}
+      </div>
     </div>
   `;
 };
 
 const renderDashboard = async () => {
   state.view = 'dashboard';
+  setActiveView('dashboard');
   const container = buildShell();
   container.innerHTML = `
-    <section class="card">
+    <section class="card stack-card">
       <div class="dashboard-header">
         <div>
           <p class="small-text">Daily dashboard</p>
@@ -307,7 +355,7 @@ const renderDashboard = async () => {
       </div>
       <div id="totals"></div>
     </section>
-    <section class="card">
+    <section class="card stack-card">
       <div class="flex space-between">
         <h3>Entries</h3>
         <button id="add-entry">Add entry</button>
@@ -324,13 +372,13 @@ const renderDashboard = async () => {
   container.querySelector('#prev-day')?.addEventListener('click', () => {
     const current = new Date(state.selectedDate);
     current.setDate(current.getDate() - 1);
-    updateDate(current.toISOString().slice(0, 10));
+    updateDate(toDateInputValue(current));
   });
 
   container.querySelector('#next-day')?.addEventListener('click', () => {
     const current = new Date(state.selectedDate);
     current.setDate(current.getDate() + 1);
-    updateDate(current.toISOString().slice(0, 10));
+    updateDate(toDateInputValue(current));
   });
 
   container.querySelector<HTMLInputElement>('#date-picker')?.addEventListener('change', (e) => {
@@ -340,6 +388,7 @@ const renderDashboard = async () => {
 
   container.querySelector('#add-entry')?.addEventListener('click', () => {
     state.entryReturnContext = null;
+    setActiveView('add-entry');
     renderEntryForm({ date: state.selectedDate });
   });
 
@@ -365,14 +414,10 @@ const renderDashboard = async () => {
         <li class="entry-row">
           <div class="entry-main">
             <strong>${entry.foodName}</strong>
-            <div class="small-text">${entry.servings} serving(s)</div>
+            <div class="small-text">${formatNumber(entry.servings).toFixed(2)} serving(s)</div>
           </div>
           <div class="entry-meta">
-            <div class="chips">
-              <div class="chip">${formatNumber(calories)} kcal</div>
-              <div class="chip">${formatNumber(carbs)} g carbs</div>
-              <div class="chip">${formatNumber(protein)} g protein</div>
-            </div>
+            ${renderMacroChips({ calories, carbs, protein })}
             <div class="entry-actions">
               <button class="secondary" data-edit="${entry.id}">Edit</button>
               <button class="danger" data-delete="${entry.id}">Delete</button>
@@ -409,9 +454,9 @@ const renderDashboard = async () => {
 const upsertFood = async (food: Partial<Food> & { name: string }) => {
   if (!state.user) throw new Error('No user');
   const payload = {
-    caloriesPerServing: Number(food.caloriesPerServing ?? 0),
-    carbsPerServing: Number(food.carbsPerServing ?? 0),
-    proteinPerServing: Number(food.proteinPerServing ?? 0),
+    caloriesPerServing: formatNumber(Number(food.caloriesPerServing ?? 0)),
+    carbsPerServing: formatNumber(Number(food.carbsPerServing ?? 0)),
+    proteinPerServing: formatNumber(Number(food.proteinPerServing ?? 0)),
     favorite: Boolean(food.favorite),
     name: food.name.trim(),
     createdAt: serverTimestamp(),
@@ -443,37 +488,43 @@ const renderFoodForm = (options: {
   prefillName?: string;
 }) => {
   const { onSave, food, container, prefillName } = options;
+  let caloriesVal = food?.caloriesPerServing ?? 0;
+  let carbsVal = food?.carbsPerServing ?? 0;
+  let proteinVal = food?.proteinPerServing ?? 0;
   const form = document.createElement('form');
   form.className = 'form-grid';
   form.innerHTML = `
-    <div>
-      <label for="food-name">Name</label>
-      <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
-      <p class="small-text">Editing foods will not change past entries.</p>
-    </div>
-    <div>
-      <button type="button" id="lookup-nutrition">Lookup nutrition</button>
-      <p class="small-text">Uses USDA FoodData Central; values may be per 100g—adjust per serving.</p>
+    <div class="field-group inline-action">
+      <div class="field-main">
+        <label for="food-name">Name</label>
+        <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
+      </div>
+      <div class="field-action">
+        <button type="button" id="lookup-nutrition" class="secondary ghost">Lookup</button>
+      </div>
+      <p class="small-text">Editing foods will not change past entries. Lookups use USDA FoodData Central.</p>
       <div id="lookup-error" class="error-text"></div>
       <div id="lookup-results" class="food-suggestions"></div>
     </div>
-    <div>
-      <label for="calories">Calories / serving</label>
-      <input id="calories" name="caloriesPerServing" type="number" min="0" required value="${
-        food?.caloriesPerServing ?? ''
-      }" />
-    </div>
-    <div>
-      <label for="carbs">Carbs (g) / serving</label>
-      <input id="carbs" name="carbsPerServing" type="number" min="0" required value="${
-        food?.carbsPerServing ?? ''
-      }" />
-    </div>
-    <div>
-      <label for="protein">Protein (g) / serving</label>
-      <input id="protein" name="proteinPerServing" type="number" min="0" required value="${
-        food?.proteinPerServing ?? ''
-      }" />
+    <div class="macro-grid">
+      <div>
+        <label for="calories">Calories / serving</label>
+        <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+          caloriesVal
+        ).toFixed(2)}" />
+      </div>
+      <div>
+        <label for="carbs">Carbs (g) / serving</label>
+        <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+          carbsVal
+        ).toFixed(2)}" />
+      </div>
+      <div>
+        <label for="protein">Protein (g) / serving</label>
+        <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+          proteinVal
+        ).toFixed(2)}" />
+      </div>
     </div>
     <div>
       <label for="favorite">Favorite</label>
@@ -493,9 +544,9 @@ const renderFoodForm = (options: {
     const payload = {
       id: food?.id,
       name: String(formData.get('name') || '').trim(),
-      caloriesPerServing: Number(formData.get('caloriesPerServing') || 0),
-      carbsPerServing: Number(formData.get('carbsPerServing') || 0),
-      proteinPerServing: Number(formData.get('proteinPerServing') || 0),
+      caloriesPerServing: caloriesVal,
+      carbsPerServing: carbsVal,
+      proteinPerServing: proteinVal,
       favorite: formData.get('favorite') === 'true',
     } as Food;
     const id = await upsertFood(payload);
@@ -511,6 +562,33 @@ const renderFoodForm = (options: {
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
 
+  const attachDecimalInput = (
+    input: HTMLInputElement | null,
+    min: number,
+    onChange: (value: number) => void
+  ) => {
+    if (!input) return;
+    input.addEventListener('input', () => {
+      const parsed = parseDecimal2(input.value, min);
+      onChange(parsed);
+    });
+    input.addEventListener('blur', () => {
+      const parsed = parseDecimal2(input.value, min);
+      input.value = parsed.toFixed(2);
+      onChange(parsed);
+    });
+  };
+
+  attachDecimalInput(caloriesInput, 0, (value) => {
+    caloriesVal = value;
+  });
+  attachDecimalInput(carbsInput, 0, (value) => {
+    carbsVal = value;
+  });
+  attachDecimalInput(proteinInput, 0, (value) => {
+    proteinVal = value;
+  });
+
   const renderLookupResults = (results: UsdaFoodResult[]) => {
     if (!lookupResults) return;
     lookupResults.innerHTML = '';
@@ -521,13 +599,17 @@ const renderFoodForm = (options: {
         result.calories
       )} kcal • ${formatNumber(result.carbs)} g carbs • ${formatNumber(result.protein)} g protein</div>`;
       btn.addEventListener('click', () => {
-        if (caloriesInput) caloriesInput.value = String(result.calories || 0);
-        if (carbsInput) carbsInput.value = String(result.carbs || 0);
-        if (proteinInput) proteinInput.value = String(result.protein || 0);
+        caloriesVal = parseDecimal2(String(result.calories || 0), 0);
+        carbsVal = parseDecimal2(String(result.carbs || 0), 0);
+        proteinVal = parseDecimal2(String(result.protein || 0), 0);
+        if (caloriesInput) caloriesInput.value = caloriesVal.toFixed(2);
+        if (carbsInput) carbsInput.value = carbsVal.toFixed(2);
+        if (proteinInput) proteinInput.value = proteinVal.toFixed(2);
         lookupResults.innerHTML = '';
       });
       lookupResults.appendChild(btn);
     });
+    lookupResults.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
   lookupBtn?.addEventListener('click', async () => {
@@ -567,18 +649,19 @@ const renderFoodForm = (options: {
 
 const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string }) => {
   state.view = 'add-food';
+  setActiveView(options?.returnDate ? 'add-entry' : 'foods');
   if (!state.entryFormFoodCacheLoaded) {
     await getUserFoods();
   }
   const container = buildShell();
   container.innerHTML = `
-    <section class="card">
-      <div class="flex space-between">
+    <section class="card stack-card">
+      <div class="compact-header">
+        <button id="back-from-food" class="secondary ghost">← Back</button>
         <div>
           <p class="small-text">${options?.prefillName ? 'Create food' : 'Add food'}</p>
           <h2>Add food</h2>
         </div>
-        <button id="back-from-food" class="secondary">Back</button>
       </div>
       <div id="add-food-form"></div>
     </section>
@@ -586,9 +669,11 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 
   const goBack = () => {
     if (options?.returnDate) {
+      setActiveView('add-entry');
       renderEntryForm({ date: options.returnDate });
       return;
     }
+    setActiveView('foods');
     renderFoods();
   };
 
@@ -602,10 +687,12 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
     prefillName: options?.prefillName,
     onSave: (food) => {
       state.prefillFoodId = food.id;
+      state.entryReturnContext = options?.returnDate ? { date: options.returnDate } : state.entryReturnContext;
       if (!state.foodCache.find((f) => f.id === food.id)) {
         state.foodCache.push(food);
       }
       if (options?.returnDate) {
+        setActiveView('add-entry');
         renderEntryForm({ date: options.returnDate });
       } else {
         renderFoods();
@@ -616,17 +703,18 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 
 const renderFoods = async () => {
   state.view = 'foods';
+  setActiveView('foods');
   const container = buildShell();
   container.innerHTML = `
-    <section class="card">
-      <div class="flex space-between">
+    <section class="card stack-card">
+      <div class="compact-header">
         <div>
           <p class="small-text">Saved foods</p>
           <h2>Foods</h2>
         </div>
         <button id="create-food">Add food</button>
       </div>
-      <div id="food-list" class="card"></div>
+      <div id="food-list"></div>
     </section>
   `;
 
@@ -641,13 +729,19 @@ const renderFoods = async () => {
       .sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1))
       .map(
         (food) => `
-        <div class="table-like">
-          <div><span class="favorite">${food.favorite ? '★' : ''}</span>${food.name}</div>
-          <div>${food.caloriesPerServing} kcal</div>
-          <div>${food.carbsPerServing} g carbs</div>
-          <div>${food.proteinPerServing} g protein</div>
-          <div></div>
-          <div class="entry-actions">
+        <div class="food-card">
+          <div class="food-card__top">
+            <div class="food-card__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${
+          food.name
+        }</div>
+            <p class="small-text">Per serving</p>
+            ${renderMacroChips({
+              calories: food.caloriesPerServing,
+              carbs: food.carbsPerServing,
+              protein: food.proteinPerServing,
+            })}
+          </div>
+          <div class="food-card__actions">
             <button class="secondary" data-edit="${food.id}">Edit</button>
             <button class="secondary" data-favorite="${food.id}">${food.favorite ? 'Unfavorite' : 'Favorite'}</button>
             <button class="danger" data-delete="${food.id}">Delete</button>
@@ -655,12 +749,7 @@ const renderFoods = async () => {
         </div>`
       )
       .join('');
-    listEl.innerHTML = `
-      <div class="table-like header">
-        <div>Name</div><div>Calories</div><div>Carbs</div><div>Protein</div><div></div><div>Actions</div>
-      </div>
-      ${rows}
-    `;
+    listEl.innerHTML = rows;
 
     listEl.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -717,10 +806,11 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const { date, entryId } = options;
   state.entryReturnContext = { date };
   state.view = entryId ? 'edit-entry' : 'add-entry';
+  setActiveView('add-entry');
   state.selectedDate = date;
   const container = buildShell();
   container.innerHTML = `
-    <section class="card">
+    <section class="card stack-card">
       <div class="flex space-between">
         <div>
           <p class="small-text">${entryId ? 'Edit entry' : 'Add entry'}</p>
@@ -731,7 +821,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       <form id="entry-form" class="form-grid"></form>
     </section>
   `;
-  container.querySelector('#back-dashboard')?.addEventListener('click', () => renderDashboard());
+  container.querySelector('#back-dashboard')?.addEventListener('click', () => {
+    setActiveView('dashboard');
+    renderDashboard();
+  });
 
   if (!state.entryFormFoodCacheLoaded) await getUserFoods();
   const foods = state.foodCache;
@@ -758,14 +851,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     state.prefillFoodId = undefined;
   }
 
-  const normalizeServingsInput = (value: string) => {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed) && parsed >= 1) {
-      return Math.floor(parsed);
-    }
-    return 1;
-  };
-
   if (entryId && state.user) {
     const entryRef = doc(db, 'users', state.user.uid, 'entries', date, 'items', entryId);
     const entrySnap = await getDoc(entryRef);
@@ -788,11 +873,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     const protein = servings * perServing.protein;
     const totalsEl = entryForm.querySelector('#entry-totals');
     if (totalsEl) {
-      totalsEl.innerHTML = `
-        <div class="total-card">${formatNumber(calories)} kcal</div>
-        <div class="total-card">${formatNumber(carbs)} g carbs</div>
-        <div class="total-card">${formatNumber(protein)} g protein</div>
-      `;
+      totalsEl.innerHTML = renderMacroChips({ calories, carbs, protein });
     }
   };
 
@@ -814,7 +895,16 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     filtered.forEach((food) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.innerHTML = `${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}`;
+      btn.innerHTML = `
+        <div class="food-option">
+          <div class="food-option__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
+          ${renderMacroChips({
+            calories: food.caloriesPerServing,
+            carbs: food.carbsPerServing,
+            protein: food.proteinPerServing,
+          })}
+        </div>
+      `;
       btn.addEventListener('click', () => {
         selectedFood = food;
         perServing = {
@@ -824,45 +914,68 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         };
         const input = entryForm.querySelector<HTMLInputElement>('#food');
         if (input) input.value = food.name;
+        const caloriesInput = entryForm.querySelector<HTMLInputElement>('#calories');
+        const carbsInput = entryForm.querySelector<HTMLInputElement>('#carbs');
+        const proteinInput = entryForm.querySelector<HTMLInputElement>('#protein');
+        if (caloriesInput)
+          caloriesInput.value = formatNumber(food.caloriesPerServing).toFixed(2);
+        if (carbsInput) carbsInput.value = formatNumber(food.carbsPerServing).toFixed(2);
+        if (proteinInput) proteinInput.value = formatNumber(food.proteinPerServing).toFixed(2);
         renderFoodSuggestions(food.name);
         updateTotals();
+        const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
+        servingsInput?.focus();
       });
       list?.appendChild(btn);
     });
   };
 
   entryForm.innerHTML = `
-    <div>
+    <div class="field-group">
       <label for="food">Food</label>
       <input id="food" name="food" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
+      <p class="small-text">Favorites show by default; type to search your foods.</p>
       <div id="food-suggestions"></div>
     </div>
-    <div>
-      <label for="servings">Servings</label>
-      <input
-        id="servings"
-        name="servings"
-        type="text"
-        inputmode="numeric"
-        pattern="[0-9]*"
-        placeholder="e.g., 1"
-        value="${servings}"
-        required
-      />
+    <div class="responsive-row">
+      <div>
+        <label for="servings">Servings</label>
+        <input
+          id="servings"
+          name="servings"
+          type="text"
+          inputmode="decimal"
+          placeholder="e.g., 1.25"
+          value="${formatNumber(servings).toFixed(2)}"
+          required
+        />
+        <p class="small-text">Enter amount eaten (minimum 0.01).</p>
+      </div>
+      <div class="totals-panel">
+        <p class="small-text">Totals</p>
+        <div id="entry-totals"></div>
+      </div>
     </div>
-    <div>
-      <label for="calories">Calories per serving</label>
-      <input id="calories" name="calories" type="number" min="0" value="${perServing.calories}" required />
+    <div class="macro-grid">
+      <div>
+        <label for="calories">Calories per serving</label>
+        <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumber(
+          perServing.calories
+        ).toFixed(2)}" required />
+      </div>
+      <div>
+        <label for="carbs">Carbs (g) per serving</label>
+        <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumber(
+          perServing.carbs
+        ).toFixed(2)}" required />
+      </div>
+      <div>
+        <label for="protein">Protein (g) per serving</label>
+        <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumber(
+          perServing.protein
+        ).toFixed(2)}" required />
+      </div>
     </div>
-    <div>
-      <label for="carbs">Carbs (g) per serving</label>
-      <input id="carbs" name="carbs" type="number" min="0" value="${perServing.carbs}" required />
-    </div>
-    <div>
-      <label for="protein">Protein (g) per serving</label>
-      <input id="protein" name="protein" type="number" min="0" value="${perServing.protein}" required />
-    </div>
-    <div id="entry-totals" class="totals"></div>
     <div class="footer-actions">
       ${entryId ? '<button type="button" class="secondary" id="cancel-edit">Cancel</button>' : ''}
       <button type="submit">Save entry</button>
@@ -872,35 +985,56 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   renderFoodSuggestions(typedName);
   updateTotals();
 
+  const attachDecimalInput = (
+    selector: string,
+    min: number,
+    onChange: (value: number) => void
+  ) => {
+    const input = entryForm.querySelector<HTMLInputElement>(selector);
+    if (!input) return;
+    input.addEventListener('input', () => {
+      const parsed = parseDecimal2(input.value, min);
+      onChange(parsed);
+      updateTotals();
+    });
+    input.addEventListener('blur', () => {
+      const parsed = parseDecimal2(input.value, min);
+      input.value = parsed.toFixed(2);
+      onChange(parsed);
+      updateTotals();
+    });
+  };
+
+  attachDecimalInput('#servings', 0.01, (value) => {
+    servings = value;
+  });
+
+  attachDecimalInput('#calories', 0, (value) => {
+    perServing.calories = value;
+  });
+  attachDecimalInput('#carbs', 0, (value) => {
+    perServing.carbs = value;
+  });
+  attachDecimalInput('#protein', 0, (value) => {
+    perServing.protein = value;
+  });
+
+  if (state.prefillFoodId) {
+    setTimeout(() => {
+      entryForm.querySelector<HTMLInputElement>('#servings')?.focus();
+    }, 50);
+  }
+
   entryForm.querySelector<HTMLInputElement>('#food')?.addEventListener('input', (e) => {
     typedName = (e.target as HTMLInputElement).value;
     selectedFood = undefined;
     renderFoodSuggestions(typedName);
   });
 
-  const perServingInputs = ['#calories', '#carbs', '#protein'];
-  perServingInputs.forEach((selector) =>
-    entryForm.querySelector<HTMLInputElement>(selector)?.addEventListener('input', (e) => {
-      const value = Number((e.target as HTMLInputElement).value || 0);
-      if (selector === '#calories') perServing.calories = value;
-      if (selector === '#carbs') perServing.carbs = value;
-      if (selector === '#protein') perServing.protein = value;
-      updateTotals();
-    })
-  );
-
-  const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
-  const syncServingsInput = () => {
-    if (!servingsInput) return;
-    servings = normalizeServingsInput(servingsInput.value || '1');
-    servingsInput.value = String(servings);
-    updateTotals();
-  };
-
-  servingsInput?.addEventListener('input', syncServingsInput);
-  servingsInput?.addEventListener('blur', syncServingsInput);
-
-  entryForm.querySelector('#cancel-edit')?.addEventListener('click', () => renderDashboard());
+  entryForm.querySelector('#cancel-edit')?.addEventListener('click', () => {
+    setActiveView('dashboard');
+    renderDashboard();
+  });
 
   entryForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -913,10 +1047,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     }
     const payload = {
       foodName,
-      servings,
-      caloriesPerServing: perServing.calories,
-      carbsPerServing: perServing.carbs,
-      proteinPerServing: perServing.protein,
+      servings: formatNumber(servings),
+      caloriesPerServing: formatNumber(perServing.calories),
+      carbsPerServing: formatNumber(perServing.carbs),
+      proteinPerServing: formatNumber(perServing.protein),
       createdAt: serverTimestamp(),
     };
 
@@ -939,6 +1073,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     } else {
       await addDoc(collection(db, 'users', state.user.uid, 'entries', date, 'items'), payload);
     }
+    setActiveView('dashboard');
     renderDashboard();
   });
 };
@@ -965,12 +1100,15 @@ appEl.addEventListener('click', (event) => {
     signOut(auth);
   }
   if (target.id === 'nav-dashboard') {
+    setActiveView('dashboard');
     renderDashboard();
   }
   if (target.id === 'nav-foods') {
+    setActiveView('foods');
     renderFoods();
   }
   if (target.id === 'nav-add-entry') {
+    setActiveView('add-entry');
     renderEntryForm({ date: state.selectedDate });
   }
 });
