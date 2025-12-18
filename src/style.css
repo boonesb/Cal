@@ -44,12 +44,25 @@ h6 {
   margin: 0.2em 0;
 }
 
+h1 {
+  font-size: 1.75rem;
+}
+
+h2 {
+  font-size: 1.35rem;
+}
+
 .card {
   background: #fff;
   border-radius: 16px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
   padding: 1rem;
   margin-bottom: 1rem;
+}
+
+.stack-card {
+  display: grid;
+  gap: 0.75rem;
 }
 
 .button,
@@ -69,6 +82,12 @@ input[type='submit'] {
 button.secondary,
 .button.secondary {
   background: #e2e8f0;
+  color: #0f172a;
+}
+
+.ghost {
+  background: transparent;
+  border: 1px solid #cbd5e1;
   color: #0f172a;
 }
 
@@ -100,6 +119,29 @@ label {
   margin-bottom: 0.25rem;
 }
 
+.field-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.inline-action {
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.inline-action .field-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.inline-action .field-action {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -120,11 +162,24 @@ label {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .navbar button.active {
   background: #0f766e;
   color: #fff;
+}
+
+.compact-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.compact-header h2 {
+  margin: 0;
 }
 
 .list {
@@ -166,16 +221,17 @@ label {
 }
 
 .totals {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 0.75rem;
 }
 
 .total-card {
   background: #ecfeff;
-  padding: 0.75rem;
+  padding: 0.75rem 0.85rem;
   border-radius: 12px;
   border: 1px solid #99f6e4;
+  width: 100%;
 }
 
 .small-text {
@@ -202,6 +258,28 @@ label {
   align-items: flex-end;
 }
 
+.responsive-row {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.totals-panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.macro-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
 .chips {
   display: flex;
   gap: 0.35rem;
@@ -209,11 +287,35 @@ label {
   justify-content: flex-end;
 }
 
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .chip {
-  padding: 0.25rem 0.5rem;
+  padding: 0.4rem 0.6rem;
   background: #e2e8f0;
-  border-radius: 8px;
-  font-size: 0.85rem;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.macro-chip {
+  background: #edf2ff;
+}
+
+.chip-label {
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.75rem;
+}
+
+.chip-value {
+  font-weight: 700;
 }
 
 input[type='date'] {
@@ -231,7 +333,11 @@ input[type='date'] {
 .date-controls {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
+}
+
+.date-controls button {
+  padding: 0.5rem 0.75rem;
 }
 
 .food-suggestions {
@@ -256,94 +362,48 @@ input[type='date'] {
   background: #ecfeff;
 }
 
+.food-option {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.food-option__title {
+  font-weight: 600;
+}
+
 .favorite {
   color: #f59e0b;
   font-weight: 700;
   margin-right: 0.4rem;
 }
 
-.table-like {
+
+.food-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: #fff;
   display: grid;
-  grid-template-columns: 1.4fr 0.8fr 0.8fr 0.8fr 0.8fr 1fr;
-  font-size: 0.9rem;
   gap: 0.5rem;
-  align-items: center;
+  margin-bottom: 0.75rem;
 }
 
-.table-like.header {
+.food-card__top {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.food-card__title {
   font-weight: 700;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
-@media (max-width: 640px) {
-  .table-like.header {
-    display: none;
-  }
-
-  .table-like {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-    padding: 0.75rem 0;
-    border-bottom: 1px solid #e2e8f0;
-    align-items: start;
-  }
-
-  .table-like .entry-actions {
-    margin-top: 0.5rem;
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
-
-  .dashboard-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .date-controls {
-    width: 100%;
-    justify-content: space-between;
-    flex-wrap: wrap;
-  }
-
-  .date-controls input[type='date'] {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .entry-row {
-    grid-template-columns: 1fr;
-  }
-
-  .entry-meta {
-    align-items: flex-start;
-  }
-
-  .chips {
-    justify-content: flex-start;
-  }
-
-  .entry-actions {
-    width: 100%;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-
-  .entry-actions button {
-    flex: 1;
-  }
-}
-
-
-@media (max-width: 720px) {
-  .table-like,
-  .table-like.header {
-    display: block;
-  }
-  .table-like > div {
-    margin: 0.25rem 0;
-  }
+.food-card__actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.35rem;
 }
 
 .inline-alert {
@@ -369,4 +429,59 @@ input[aria-invalid='true'] {
   color: #dc2626;
   font-size: 0.85rem;
   margin-top: 0.25rem;
+}
+
+@media (max-width: 640px) {
+  #app {
+    padding: 0.75rem;
+  }
+
+  h1 {
+    font-size: 1.35rem;
+  }
+
+  h2 {
+    font-size: 1.2rem;
+  }
+
+  .navbar button {
+    flex: 1;
+  }
+
+  .responsive-row {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-row {
+    grid-template-columns: 1fr;
+  }
+
+  .entry-meta {
+    align-items: flex-start;
+  }
+
+  .chip-row {
+    justify-content: flex-start;
+  }
+
+  .entry-actions {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .entry-actions button {
+    flex: 1;
+  }
+
+  .date-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .date-controls input[type='date'] {
+    flex: 1;
+    min-width: 0;
+  }
 }
