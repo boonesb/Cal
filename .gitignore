@@ -6,3 +6,4 @@ dist
 npm-debug.log*
 .firebase/
 .firebase/*.cache
+src/generated/version.ts

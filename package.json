@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/generate-version.cjs",
     "dev": "vite",
+    "prebuild": "node scripts/generate-version.cjs",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit"

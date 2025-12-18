@@ -20,6 +20,7 @@ import {
   User,
 } from 'firebase/auth';
 import { auth, db } from './firebase';
+import { APP_VERSION, BUILD_TIME_ISO } from './generated/version';
 
 const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
 
@@ -74,13 +75,12 @@ type Entry = {
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
-type ActiveView = 'dashboard' | 'foods' | 'add-entry' | 'add-food';
 
 const state: {
   user: User | null;
   selectedDate: string;
   view: View;
-  activeView: ActiveView;
+  currentView: 'dashboard' | 'foods' | 'entry';
   foodCache: Food[];
   entryFormFoodCacheLoaded: boolean;
   inactivityTimer: number | null;
@@ -93,7 +93,7 @@ const state: {
   user: null,
   selectedDate: todayStr(),
   view: 'dashboard',
-  activeView: 'dashboard',
+  currentView: 'dashboard',
   foodCache: [],
   entryFormFoodCacheLoaded: false,
   inactivityTimer: null,
@@ -124,6 +124,21 @@ const formatNumberSmart = (num: number) => {
   return rounded.toFixed(2).replace(/\.?0+$/, '');
 };
 
+const applyViewState = (view: View, payload?: { returnDate?: string }) => {
+  if (view === 'add-food') {
+    state.returnToEntryAfterFoodSave = Boolean(payload?.returnDate ?? state.returnToEntryAfterFoodSave);
+  } else {
+    state.returnToEntryAfterFoodSave = false;
+  }
+  state.view = view;
+  state.currentView =
+    view === 'dashboard'
+      ? 'dashboard'
+      : view === 'foods' || (view === 'add-food' && !state.returnToEntryAfterFoodSave)
+        ? 'foods'
+        : 'entry';
+};
+
 const parseDecimal2 = (raw: string, min: number) => {
   const sanitized = raw.replace(/[^0-9.]/g, '');
   const parts = sanitized.split('.');
@@ -144,11 +159,18 @@ const renderMacroChips = (options: {
   protein: number;
   variant?: 'subtle' | 'solid';
   label?: string;
+  layout?: 'row' | 'grid';
+  align?: 'start' | 'center';
+  className?: string;
 }) => {
-  const { calories, carbs, protein, variant = 'solid', label } = options;
+  const { calories, carbs, protein, variant = 'solid', label, layout = 'row', align = 'start', className } = options;
   const chipClass = variant === 'subtle' ? 'chip subtle' : 'chip';
+  const rowClasses = ['chip-row'];
+  if (layout === 'grid') rowClasses.push('chip-row--grid');
+  if (align === 'center') rowClasses.push('chip-row--center');
+  if (className) rowClasses.push(className);
   return `
-    <div class="chip-row">
+    <div class="${rowClasses.join(' ')}">
       ${label ? `<span class="chip-label chip-label--section">${label}</span>` : ''}
       <div class="${chipClass} macro-chip"><span class="chip-label">kcal</span><span class="chip-value">${formatNumberSmart(
         calories
@@ -166,6 +188,8 @@ const renderMacroChips = (options: {
 type UsdaFoodResult = {
   id: string;
   description: string;
+  dataType?: string;
+  brandOwner?: string;
   calories: number;
   carbs: number;
   protein: number;
@@ -203,6 +227,8 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
     return {
       id: String(food.fdcId ?? food.description),
       description: String(food.description ?? 'Food'),
+      dataType: food.dataType ? String(food.dataType) : undefined,
+      brandOwner: food.brandOwner ? String(food.brandOwner) : undefined,
       calories: findNutrient('1008'),
       carbs: findNutrient('1005'),
       protein: findNutrient('1003'),
@@ -268,8 +294,16 @@ const setAppContent = (html: string) => {
   appEl.innerHTML = html;
 };
 
+const renderFooter = () => {
+  const footer = document.createElement('footer');
+  footer.className = 'app-footer';
+  footer.textContent = `v ${APP_VERSION} · ${BUILD_TIME_ISO}`;
+  return footer;
+};
+
 const showLoading = (message = 'Loading...') => {
   setAppContent(`<p>${message}</p>`);
+  appEl.appendChild(renderFooter());
 };
 
 const renderLogin = () => {
@@ -319,13 +353,13 @@ const renderLogin = () => {
   });
 
   createBtn?.addEventListener('click', () => handleAuth(true));
+
+  appEl.appendChild(renderFooter());
 };
 
 const renderNav = () => {
-  const navActive = (view: ActiveView) => {
-    if (view === 'add-entry' && state.activeView === 'add-food' && state.returnToEntryAfterFoodSave) return 'active';
-    if (view === 'foods' && state.activeView === 'add-food' && !state.returnToEntryAfterFoodSave) return 'active';
-    return state.activeView === view ? 'active' : '';
+  const navActive = (view: 'dashboard' | 'foods' | 'entry') => {
+    return state.currentView === view ? 'active' : '';
   };
   const header = document.createElement('header');
   const title = document.createElement('h1');
@@ -335,7 +369,7 @@ const renderNav = () => {
   nav.innerHTML = `
     <button id="nav-dashboard" class="${navActive('dashboard')}">Dashboard</button>
     <button class="secondary ${navActive('foods')}" id="nav-foods">Foods</button>
-    <button class="secondary ${navActive('add-entry')}" id="nav-add-entry">Add entry</button>
+    <button class="secondary ${navActive('entry')}" id="nav-add-entry">Add entry</button>
     <button class="secondary" id="nav-signout">Sign out</button>
   `;
   header.appendChild(title);
@@ -349,11 +383,12 @@ const buildShell = () => {
   const main = document.createElement('div');
   main.id = 'view-container';
   appEl.appendChild(main);
+  appEl.appendChild(renderFooter());
   return main;
 };
 
 const renderForView = (
-  view: ActiveView,
+  view: View,
   payload?: { date?: string; entryId?: string; prefillName?: string; foodId?: string; returnDate?: string }
 ) => {
   switch (view) {
@@ -366,6 +401,9 @@ const renderForView = (
     case 'add-entry':
       renderEntryForm({ date: payload?.date ?? state.selectedDate, entryId: payload?.entryId });
       break;
+    case 'edit-entry':
+      renderEntryForm({ date: payload?.date ?? state.selectedDate, entryId: payload?.entryId });
+      break;
     case 'add-food':
       renderAddFoodView({ prefillName: payload?.prefillName, returnDate: payload?.returnDate, foodId: payload?.foodId });
       break;
@@ -373,13 +411,10 @@ const renderForView = (
 };
 
 const setView = (
-  view: ActiveView,
+  view: View,
   payload?: { date?: string; entryId?: string; prefillName?: string; foodId?: string; returnDate?: string }
 ) => {
-  state.activeView = view;
-  if (view !== 'add-food') {
-    state.returnToEntryAfterFoodSave = false;
-  }
+  applyViewState(view, { returnDate: payload?.returnDate });
   renderForView(view, payload);
 };
 
@@ -387,7 +422,7 @@ const mobileQuery = window.matchMedia('(max-width: 640px)');
 const handleMobileChange = () => {
   const prev = state.isMobile;
   state.isMobile = mobileQuery.matches;
-  if (state.user && prev !== state.isMobile && state.activeView === 'foods') {
+  if (state.user && prev !== state.isMobile && state.view === 'foods') {
     renderForView('foods');
   }
 };
@@ -398,11 +433,14 @@ const renderTotals = (entries: Entry[]) => {
   return `
     <div class="totals">
       <div class="total-card">
+        <div class="totals-heading">Daily totals</div>
         ${renderMacroChips({
           calories: totals.calories,
           carbs: totals.carbs,
           protein: totals.protein,
-          label: 'Daily totals',
+          layout: 'grid',
+          align: 'center',
+          className: 'totals-chip-row',
         })}
       </div>
     </div>
@@ -410,7 +448,7 @@ const renderTotals = (entries: Entry[]) => {
 };
 
 const renderDashboard = async (dateOverride?: string) => {
-  state.view = 'dashboard';
+  applyViewState('dashboard');
   if (dateOverride) {
     state.selectedDate = dateOverride;
   }
@@ -632,6 +670,58 @@ const renderFoodForm = (options: {
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
 
+  const openUsdaModal = (result: UsdaFoodResult) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal">
+        <div class="modal__header">
+          <h3>Use this USDA result</h3>
+          <button type="button" class="ghost icon-button" id="close-usda-modal">✕</button>
+        </div>
+        <div class="modal__body">
+          <div class="usda-modal__summary">
+            <div class="usda-result__title">${result.description}</div>
+            <div class="usda-result__meta">
+              ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
+              ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
+            </div>
+          </div>
+          <label for="usda-serving-grams">My serving (g)</label>
+          <input id="usda-serving-grams" type="text" inputmode="decimal" value="100" />
+          <p class="small-text muted">We will estimate per-serving nutrition from this grams amount. USDA reference per 100g: ${formatNumberSmart(
+            result.calories
+          )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein.</p>
+        </div>
+        <div class="footer-actions modal__actions">
+          <button type="button" class="secondary" id="cancel-usda">Cancel</button>
+          <button type="button" id="apply-usda">Apply to form</button>
+        </div>
+      </div>
+    `;
+    const removeModal = () => overlay.remove();
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) removeModal();
+    });
+    overlay.querySelector('#cancel-usda')?.addEventListener('click', removeModal);
+    overlay.querySelector('#close-usda-modal')?.addEventListener('click', removeModal);
+    const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
+    const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
+    applyBtn?.addEventListener('click', () => {
+      const gramsVal = parseDecimal2(gramsInput?.value ?? '0', 1);
+      const factor = gramsVal / 100;
+      caloriesVal = roundTo2(result.calories * factor);
+      carbsVal = roundTo2(result.carbs * factor);
+      proteinVal = roundTo2(result.protein * factor);
+      if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
+      if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
+      if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
+      removeModal();
+    });
+    document.body.appendChild(overlay);
+    gramsInput?.focus();
+  };
+
   const attachDecimalInput = (
     input: HTMLInputElement | null,
     min: number,
@@ -665,18 +755,17 @@ const renderFoodForm = (options: {
     results.forEach((result) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.innerHTML = `<strong>${result.description}</strong><div class="small-text">${formatNumberSmart(
-        result.calories
-      )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein</div>`;
-      btn.addEventListener('click', () => {
-        caloriesVal = parseDecimal2(String(result.calories || 0), 0);
-        carbsVal = parseDecimal2(String(result.carbs || 0), 0);
-        proteinVal = parseDecimal2(String(result.protein || 0), 0);
-        if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
-        if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
-        if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
-        lookupResults.innerHTML = '';
-      });
+      btn.className = 'usda-result';
+      btn.innerHTML = `
+        <div class="usda-result__header">
+          <div class="usda-result__title">${result.description}</div>
+          ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
+        </div>
+        ${result.brandOwner ? `<div class="small-text muted">${result.brandOwner}</div>` : ''}
+        <div class="small-text">Per 100g: ${formatNumberSmart(result.calories)} kcal • ${formatNumberSmart(
+        result.carbs
+      )} g carbs • ${formatNumberSmart(result.protein)} g protein</div>`;
+      btn.addEventListener('click', () => openUsdaModal(result));
       lookupResults.appendChild(btn);
     });
     lookupResults.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -718,8 +807,7 @@ const renderFoodForm = (options: {
 };
 
 const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string; foodId?: string }) => {
-  state.view = 'add-food';
-  state.returnToEntryAfterFoodSave = Boolean(options?.returnDate);
+  applyViewState('add-food', { returnDate: options?.returnDate });
   state.pendingEntryFoodName = options?.prefillName;
   if (!state.entryFormFoodCacheLoaded) {
     await getUserFoods();
@@ -742,7 +830,6 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 
   const goBack = () => {
     state.pendingEntryFoodName = undefined;
-    state.returnToEntryAfterFoodSave = Boolean(options?.returnDate);
     if (options?.returnDate) {
       setView('add-entry', { date: options.returnDate });
       return;
@@ -778,8 +865,7 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 };
 
 const renderFoods = async () => {
-  state.view = 'foods';
-  state.returnToEntryAfterFoodSave = false;
+  applyViewState('foods');
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
@@ -904,7 +990,7 @@ const renderFoods = async () => {
 const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const { date, entryId } = options;
   state.entryReturnContext = { date };
-  state.view = entryId ? 'edit-entry' : 'add-entry';
+  applyViewState(entryId ? 'edit-entry' : 'add-entry');
   state.selectedDate = date;
   const container = buildShell();
   container.innerHTML = `
