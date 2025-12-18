@@ -29,16 +29,27 @@ if (!appEl) {
   throw new Error('Missing app container');
 }
 
-const toDateInputValue = (date: Date) => {
+const parseYmdToLocalDate = (ymd: string) => {
+  const [y, m, d] = ymd.split('-').map((part) => Number(part));
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
+const formatLocalDateToYmd = (date: Date) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
 
+const addDays = (ymd: string, delta: number) => {
+  const date = parseYmdToLocalDate(ymd);
+  date.setDate(date.getDate() + delta);
+  return formatLocalDateToYmd(date);
+};
+
 const todayStr = () => {
   const now = new Date();
-  return toDateInputValue(now);
+  return formatLocalDateToYmd(now);
 };
 
 type Food = {
@@ -75,6 +86,9 @@ const state: {
   inactivityTimer: number | null;
   entryReturnContext: { date: string } | null;
   prefillFoodId?: string;
+  pendingEntryFoodName?: string;
+  returnToEntryAfterFoodSave: boolean;
+  isMobile: boolean;
 } = {
   user: null,
   selectedDate: todayStr(),
@@ -84,6 +98,9 @@ const state: {
   entryFormFoodCacheLoaded: false,
   inactivityTimer: null,
   entryReturnContext: null,
+  pendingEntryFoodName: undefined,
+  returnToEntryAfterFoodSave: false,
+  isMobile: window.matchMedia('(max-width: 640px)').matches,
 };
 
 const resetInactivityTimer = () => {
@@ -101,32 +118,50 @@ const resetInactivityTimer = () => {
   document.addEventListener(evt, resetInactivityTimer);
 });
 
-const formatNumber = (num: number) => Math.round(num * 100) / 100;
+
+const formatNumberSmart = (num: number) => {
+  const rounded = Math.round(num * 100) / 100;
+  return rounded.toFixed(2).replace(/\.?0+$/, '');
+};
 
 const parseDecimal2 = (raw: string, min: number) => {
   const sanitized = raw.replace(/[^0-9.]/g, '');
-  const [whole, ...rest] = sanitized.split('.');
-  const decimals = rest.join('');
-  const normalized = `${whole || '0'}${decimals ? `.${decimals.slice(0, 2)}` : ''}`;
+  const parts = sanitized.split('.');
+  const whole = parts[0] || '0';
+  const decimals = parts.length > 1 ? parts.slice(1).join('') : '';
+  const normalized = decimals ? `${whole}.${decimals.slice(0, 2)}` : whole;
   const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) return min;
   const rounded = Math.round(parsed * 100) / 100;
   return Math.max(min, rounded);
 };
 
-const renderMacroChips = (macros: { calories: number; carbs: number; protein: number }) => `
-  <div class="chip-row">
-    <div class="chip macro-chip"><span class="chip-label">kcal</span><span class="chip-value">${formatNumber(
-      macros.calories
-    ).toFixed(2)}</span></div>
-    <div class="chip macro-chip"><span class="chip-label">carbs</span><span class="chip-value">${formatNumber(
-      macros.carbs
-    ).toFixed(2)} g</span></div>
-    <div class="chip macro-chip"><span class="chip-label">protein</span><span class="chip-value">${formatNumber(
-      macros.protein
-    ).toFixed(2)} g</span></div>
-  </div>
-`;
+const roundTo2 = (num: number) => Math.round(num * 100) / 100;
+
+const renderMacroChips = (options: {
+  calories: number;
+  carbs: number;
+  protein: number;
+  variant?: 'subtle' | 'solid';
+  label?: string;
+}) => {
+  const { calories, carbs, protein, variant = 'solid', label } = options;
+  const chipClass = variant === 'subtle' ? 'chip subtle' : 'chip';
+  return `
+    <div class="chip-row">
+      ${label ? `<span class="chip-label chip-label--section">${label}</span>` : ''}
+      <div class="${chipClass} macro-chip"><span class="chip-label">kcal</span><span class="chip-value">${formatNumberSmart(
+        calories
+      )}</span></div>
+      <div class="${chipClass} macro-chip"><span class="chip-label">carbs</span><span class="chip-value">${formatNumberSmart(
+        carbs
+      )} g</span></div>
+      <div class="${chipClass} macro-chip"><span class="chip-label">protein</span><span class="chip-value">${formatNumberSmart(
+        protein
+      )} g</span></div>
+    </div>
+  `;
+};
 
 type UsdaFoodResult = {
   id: string;
@@ -287,9 +322,10 @@ const renderLogin = () => {
 };
 
 const renderNav = () => {
-  const activeClass = (view: View | View[]) => {
-    const views = Array.isArray(view) ? view : [view];
-    return views.includes(state.activeView) ? 'active' : '';
+  const navActive = (view: ActiveView) => {
+    if (view === 'add-entry' && state.activeView === 'add-food' && state.returnToEntryAfterFoodSave) return 'active';
+    if (view === 'foods' && state.activeView === 'add-food' && !state.returnToEntryAfterFoodSave) return 'active';
+    return state.activeView === view ? 'active' : '';
   };
   const header = document.createElement('header');
   const title = document.createElement('h1');
@@ -297,9 +333,9 @@ const renderNav = () => {
   const nav = document.createElement('div');
   nav.className = 'navbar';
   nav.innerHTML = `
-    <button id="nav-dashboard" class="${activeClass('dashboard')}">Dashboard</button>
-    <button class="secondary ${activeClass('foods')}" id="nav-foods">Foods</button>
-    <button class="secondary ${activeClass(['add-entry', 'edit-entry'])}" id="nav-add-entry">Add entry</button>
+    <button id="nav-dashboard" class="${navActive('dashboard')}">Dashboard</button>
+    <button class="secondary ${navActive('foods')}" id="nav-foods">Foods</button>
+    <button class="secondary ${navActive('add-entry')}" id="nav-add-entry">Add entry</button>
     <button class="secondary" id="nav-signout">Sign out</button>
   `;
   header.appendChild(title);
@@ -316,29 +352,68 @@ const buildShell = () => {
   return main;
 };
 
-const setActiveView = (view: ActiveView) => {
-  state.activeView = view;
+const renderForView = (
+  view: ActiveView,
+  payload?: { date?: string; entryId?: string; prefillName?: string; foodId?: string; returnDate?: string }
+) => {
+  switch (view) {
+    case 'dashboard':
+      renderDashboard(payload?.date);
+      break;
+    case 'foods':
+      renderFoods();
+      break;
+    case 'add-entry':
+      renderEntryForm({ date: payload?.date ?? state.selectedDate, entryId: payload?.entryId });
+      break;
+    case 'add-food':
+      renderAddFoodView({ prefillName: payload?.prefillName, returnDate: payload?.returnDate, foodId: payload?.foodId });
+      break;
+  }
 };
+
+const setView = (
+  view: ActiveView,
+  payload?: { date?: string; entryId?: string; prefillName?: string; foodId?: string; returnDate?: string }
+) => {
+  state.activeView = view;
+  if (view !== 'add-food') {
+    state.returnToEntryAfterFoodSave = false;
+  }
+  renderForView(view, payload);
+};
+
+const mobileQuery = window.matchMedia('(max-width: 640px)');
+const handleMobileChange = () => {
+  const prev = state.isMobile;
+  state.isMobile = mobileQuery.matches;
+  if (state.user && prev !== state.isMobile && state.activeView === 'foods') {
+    renderForView('foods');
+  }
+};
+mobileQuery.addEventListener('change', handleMobileChange);
 
 const renderTotals = (entries: Entry[]) => {
   const totals = sumEntries(entries);
   return `
     <div class="totals">
       <div class="total-card">
-        <div class="small-text">Daily totals</div>
         ${renderMacroChips({
           calories: totals.calories,
           carbs: totals.carbs,
           protein: totals.protein,
+          label: 'Daily totals',
         })}
       </div>
     </div>
   `;
 };
 
-const renderDashboard = async () => {
+const renderDashboard = async (dateOverride?: string) => {
   state.view = 'dashboard';
-  setActiveView('dashboard');
+  if (dateOverride) {
+    state.selectedDate = dateOverride;
+  }
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
@@ -366,19 +441,15 @@ const renderDashboard = async () => {
 
   const updateDate = (newDate: string) => {
     state.selectedDate = newDate;
-    renderDashboard();
+    setView('dashboard', { date: newDate });
   };
 
   container.querySelector('#prev-day')?.addEventListener('click', () => {
-    const current = new Date(state.selectedDate);
-    current.setDate(current.getDate() - 1);
-    updateDate(toDateInputValue(current));
+    updateDate(addDays(state.selectedDate, -1));
   });
 
   container.querySelector('#next-day')?.addEventListener('click', () => {
-    const current = new Date(state.selectedDate);
-    current.setDate(current.getDate() + 1);
-    updateDate(toDateInputValue(current));
+    updateDate(addDays(state.selectedDate, 1));
   });
 
   container.querySelector<HTMLInputElement>('#date-picker')?.addEventListener('change', (e) => {
@@ -388,8 +459,7 @@ const renderDashboard = async () => {
 
   container.querySelector('#add-entry')?.addEventListener('click', () => {
     state.entryReturnContext = null;
-    setActiveView('add-entry');
-    renderEntryForm({ date: state.selectedDate });
+    setView('add-entry', { date: state.selectedDate });
   });
 
   const entriesList = container.querySelector('#entries-list');
@@ -414,10 +484,10 @@ const renderDashboard = async () => {
         <li class="entry-row">
           <div class="entry-main">
             <strong>${entry.foodName}</strong>
-            <div class="small-text">${formatNumber(entry.servings).toFixed(2)} serving(s)</div>
+            <div class="small-text">${formatNumberSmart(entry.servings)} serving(s)</div>
           </div>
           <div class="entry-meta">
-            ${renderMacroChips({ calories, carbs, protein })}
+            ${renderMacroChips({ calories, carbs, protein, variant: 'subtle' })}
             <div class="entry-actions">
               <button class="secondary" data-edit="${entry.id}">Edit</button>
               <button class="danger" data-delete="${entry.id}">Delete</button>
@@ -434,7 +504,7 @@ const renderDashboard = async () => {
     btn.addEventListener('click', () => {
       const entryId = btn.dataset.edit;
       if (!entryId) return;
-      renderEntryForm({ date: state.selectedDate, entryId });
+      setView('add-entry', { date: state.selectedDate, entryId });
     })
   );
 
@@ -446,7 +516,7 @@ const renderDashboard = async () => {
       if (!confirmed) return;
       const entryRef = doc(db, 'users', state.user.uid, 'entries', state.selectedDate, 'items', entryId);
       await deleteDoc(entryRef);
-      renderDashboard();
+      setView('dashboard');
     })
   );
 };
@@ -454,9 +524,9 @@ const renderDashboard = async () => {
 const upsertFood = async (food: Partial<Food> & { name: string }) => {
   if (!state.user) throw new Error('No user');
   const payload = {
-    caloriesPerServing: formatNumber(Number(food.caloriesPerServing ?? 0)),
-    carbsPerServing: formatNumber(Number(food.carbsPerServing ?? 0)),
-    proteinPerServing: formatNumber(Number(food.proteinPerServing ?? 0)),
+    caloriesPerServing: roundTo2(Number(food.caloriesPerServing ?? 0)),
+    carbsPerServing: roundTo2(Number(food.carbsPerServing ?? 0)),
+    proteinPerServing: roundTo2(Number(food.proteinPerServing ?? 0)),
     favorite: Boolean(food.favorite),
     name: food.name.trim(),
     createdAt: serverTimestamp(),
@@ -509,21 +579,21 @@ const renderFoodForm = (options: {
     <div class="macro-grid">
       <div>
         <label for="calories">Calories / serving</label>
-        <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+        <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
           caloriesVal
-        ).toFixed(2)}" />
+        )}" />
       </div>
       <div>
         <label for="carbs">Carbs (g) / serving</label>
-        <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+        <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
           carbsVal
-        ).toFixed(2)}" />
+        )}" />
       </div>
       <div>
         <label for="protein">Protein (g) / serving</label>
-        <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumber(
+        <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
           proteinVal
-        ).toFixed(2)}" />
+        )}" />
       </div>
     </div>
     <div>
@@ -574,7 +644,7 @@ const renderFoodForm = (options: {
     });
     input.addEventListener('blur', () => {
       const parsed = parseDecimal2(input.value, min);
-      input.value = parsed.toFixed(2);
+      input.value = formatNumberSmart(parsed);
       onChange(parsed);
     });
   };
@@ -595,16 +665,16 @@ const renderFoodForm = (options: {
     results.forEach((result) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.innerHTML = `<strong>${result.description}</strong><div class="small-text">${formatNumber(
+      btn.innerHTML = `<strong>${result.description}</strong><div class="small-text">${formatNumberSmart(
         result.calories
-      )} kcal • ${formatNumber(result.carbs)} g carbs • ${formatNumber(result.protein)} g protein</div>`;
+      )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein</div>`;
       btn.addEventListener('click', () => {
         caloriesVal = parseDecimal2(String(result.calories || 0), 0);
         carbsVal = parseDecimal2(String(result.carbs || 0), 0);
         proteinVal = parseDecimal2(String(result.protein || 0), 0);
-        if (caloriesInput) caloriesInput.value = caloriesVal.toFixed(2);
-        if (carbsInput) carbsInput.value = carbsVal.toFixed(2);
-        if (proteinInput) proteinInput.value = proteinVal.toFixed(2);
+        if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
+        if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
+        if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
         lookupResults.innerHTML = '';
       });
       lookupResults.appendChild(btn);
@@ -647,20 +717,23 @@ const renderFoodForm = (options: {
   container.appendChild(form);
 };
 
-const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string }) => {
+const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string; foodId?: string }) => {
   state.view = 'add-food';
-  setActiveView(options?.returnDate ? 'add-entry' : 'foods');
+  state.returnToEntryAfterFoodSave = Boolean(options?.returnDate);
+  state.pendingEntryFoodName = options?.prefillName;
   if (!state.entryFormFoodCacheLoaded) {
     await getUserFoods();
   }
+  const editingFood = options?.foodId ? state.foodCache.find((f) => f.id === options.foodId) : undefined;
+  const heading = editingFood ? 'Edit food' : 'Add food';
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
-      <div class="compact-header">
-        <button id="back-from-food" class="secondary ghost">← Back</button>
+      <div class="compact-header back-row">
+        <button id="back-from-food" class="ghost back-link">← Back</button>
         <div>
-          <p class="small-text">${options?.prefillName ? 'Create food' : 'Add food'}</p>
-          <h2>Add food</h2>
+          <p class="small-text">${options?.prefillName && !editingFood ? 'Create food' : heading}</p>
+          <h2>${heading}</h2>
         </div>
       </div>
       <div id="add-food-form"></div>
@@ -668,13 +741,13 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
   `;
 
   const goBack = () => {
+    state.pendingEntryFoodName = undefined;
+    state.returnToEntryAfterFoodSave = Boolean(options?.returnDate);
     if (options?.returnDate) {
-      setActiveView('add-entry');
-      renderEntryForm({ date: options.returnDate });
+      setView('add-entry', { date: options.returnDate });
       return;
     }
-    setActiveView('foods');
-    renderFoods();
+    setView('foods');
   };
 
   container.querySelector('#back-from-food')?.addEventListener('click', goBack);
@@ -684,18 +757,21 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 
   renderFoodForm({
     container: host,
-    prefillName: options?.prefillName,
+    prefillName: options?.prefillName ?? state.pendingEntryFoodName,
+    food: editingFood,
     onSave: (food) => {
-      state.prefillFoodId = food.id;
+      state.prefillFoodId = options?.returnDate ? food.id : undefined;
       state.entryReturnContext = options?.returnDate ? { date: options.returnDate } : state.entryReturnContext;
       if (!state.foodCache.find((f) => f.id === food.id)) {
         state.foodCache.push(food);
-      }
-      if (options?.returnDate) {
-        setActiveView('add-entry');
-        renderEntryForm({ date: options.returnDate });
       } else {
-        renderFoods();
+        state.foodCache = state.foodCache.map((f) => (f.id === food.id ? food : f));
+      }
+      state.pendingEntryFoodName = undefined;
+      if (options?.returnDate) {
+        setView('add-entry', { date: options.returnDate });
+      } else {
+        setView('foods');
       }
     },
   });
@@ -703,7 +779,7 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
 
 const renderFoods = async () => {
   state.view = 'foods';
-  setActiveView('foods');
+  state.returnToEntryAfterFoodSave = false;
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
@@ -725,105 +801,126 @@ const renderFoods = async () => {
       listEl.innerHTML = '<p class="small-text">No foods saved yet.</p>';
       return;
     }
-    const rows = foods
-      .sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1))
+    const sorted = foods
+      .slice()
+      .sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1));
+
+    if (state.isMobile) {
+      const cards = sorted
+        .map(
+          (food) => `
+            <div class="food-card">
+              <div class="food-card__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
+              <div class="small-text muted">Per serving</div>
+              ${renderMacroChips({
+                calories: food.caloriesPerServing,
+                carbs: food.carbsPerServing,
+                protein: food.proteinPerServing,
+                variant: 'subtle',
+              })}
+              <div class="food-card__actions">
+                <button class="secondary" data-edit="${food.id}">Edit</button>
+                <button class="secondary" data-favorite="${food.id}">${food.favorite ? 'Unfavorite' : 'Favorite'}</button>
+                <button class="danger ghost" data-delete="${food.id}">Delete</button>
+              </div>
+            </div>`
+        )
+        .join('');
+      listEl.innerHTML = cards;
+      return;
+    }
+
+    const rows = sorted
       .map(
         (food) => `
-        <div class="food-card">
-          <div class="food-card__top">
-            <div class="food-card__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${
-          food.name
-        }</div>
-            <p class="small-text">Per serving</p>
+        <div class="food-row">
+          <div class="food-row__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
+          <div class="food-row__macros">
             ${renderMacroChips({
               calories: food.caloriesPerServing,
               carbs: food.carbsPerServing,
               protein: food.proteinPerServing,
+              variant: 'subtle',
             })}
           </div>
-          <div class="food-card__actions">
+          <div class="food-row__actions">
             <button class="secondary" data-edit="${food.id}">Edit</button>
             <button class="secondary" data-favorite="${food.id}">${food.favorite ? 'Unfavorite' : 'Favorite'}</button>
-            <button class="danger" data-delete="${food.id}">Delete</button>
+            <button class="danger ghost" data-delete="${food.id}">Delete</button>
           </div>
         </div>`
       )
       .join('');
-    listEl.innerHTML = rows;
 
-    listEl.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const id = btn.dataset.edit;
-        const existing = foods.find((f) => f.id === id);
-        if (existing) {
-          renderFoodForm({
-            container: foodFormContainer,
-            food: existing,
-            onSave: () => renderFoods(),
-          });
-        }
-      });
-    });
-
-    listEl.querySelectorAll<HTMLButtonElement>('button[data-favorite]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.favorite;
-        const existing = foods.find((f) => f.id === id);
-        if (!existing || !state.user) return;
-        const foodRef = doc(db, 'users', state.user.uid, 'foods', existing.id);
-        await updateDoc(foodRef, { favorite: !existing.favorite });
-        state.foodCache = state.foodCache.map((f) => (f.id === existing.id ? { ...f, favorite: !f.favorite } : f));
-        renderFoods();
-      });
-    });
-
-    listEl.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.delete;
-        const existing = foods.find((f) => f.id === id);
-        if (!existing || !state.user) return;
-        const confirmed = confirm(
-          'Delete this food? Historical entries will keep their stored nutrition snapshot.'
-        );
-        if (!confirmed) return;
-        const foodRef = doc(db, 'users', state.user.uid, 'foods', existing.id);
-        await deleteDoc(foodRef);
-        state.foodCache = state.foodCache.filter((f) => f.id !== existing.id);
-        renderFoods();
-      });
-    });
+    listEl.innerHTML = `
+      <div class="food-row food-row--header">
+        <div>Name</div>
+        <div>Per serving</div>
+        <div>Actions</div>
+      </div>
+      <div class="food-row-group">${rows}</div>
+    `;
   };
 
   container.querySelector('#create-food')?.addEventListener('click', () => {
-    renderAddFoodView();
+    setView('add-food');
   });
 
   const foods = state.foodCache.length ? state.foodCache : await getUserFoods();
   renderList(foods);
+
+  container.querySelector('#food-list')?.addEventListener('click', async (event) => {
+    const target = event.target as HTMLElement;
+    const button = target.closest<HTMLButtonElement>('button[data-edit],button[data-favorite],button[data-delete]');
+    if (!button) return;
+    const id = button.dataset.edit || button.dataset.favorite || button.dataset.delete;
+    if (!id) return;
+    const currentFood = state.foodCache.find((f) => f.id === id);
+    if (!currentFood) return;
+    if (button.dataset.edit) {
+      setView('add-food', { foodId: id });
+      return;
+    }
+    if (button.dataset.favorite) {
+      if (!state.user) return;
+      const foodRef = doc(db, 'users', state.user.uid, 'foods', currentFood.id);
+      await updateDoc(foodRef, { favorite: !currentFood.favorite });
+      state.foodCache = state.foodCache.map((f) => (f.id === currentFood.id ? { ...f, favorite: !f.favorite } : f));
+      renderList(state.foodCache);
+      return;
+    }
+    if (button.dataset.delete) {
+      if (!state.user) return;
+      const confirmed = confirm('Delete this food? Historical entries will keep their stored nutrition snapshot.');
+      if (!confirmed) return;
+      const foodRef = doc(db, 'users', state.user.uid, 'foods', currentFood.id);
+      await deleteDoc(foodRef);
+      state.foodCache = state.foodCache.filter((f) => f.id !== currentFood.id);
+      renderList(state.foodCache);
+    }
+  });
 };
 
 const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const { date, entryId } = options;
   state.entryReturnContext = { date };
   state.view = entryId ? 'edit-entry' : 'add-entry';
-  setActiveView('add-entry');
   state.selectedDate = date;
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
-      <div class="flex space-between">
+      <div class="flex space-between back-row">
         <div>
           <p class="small-text">${entryId ? 'Edit entry' : 'Add entry'}</p>
           <h2>${date}</h2>
         </div>
-        <button id="back-dashboard" class="secondary">Back</button>
+        <button id="back-dashboard" class="ghost back-link">← Back</button>
       </div>
       <form id="entry-form" class="form-grid"></form>
     </section>
   `;
   container.querySelector('#back-dashboard')?.addEventListener('click', () => {
-    setActiveView('dashboard');
-    renderDashboard();
+    setView('dashboard');
   });
 
   if (!state.entryFormFoodCacheLoaded) await getUserFoods();
@@ -873,7 +970,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     const protein = servings * perServing.protein;
     const totalsEl = entryForm.querySelector('#entry-totals');
     if (totalsEl) {
-      totalsEl.innerHTML = renderMacroChips({ calories, carbs, protein });
+      totalsEl.innerHTML = renderMacroChips({ calories, carbs, protein, label: 'Totals' });
     }
   };
 
@@ -886,7 +983,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        renderAddFoodView({ prefillName: term, returnDate: date });
+        setView('add-food', { prefillName: term, returnDate: date });
       });
       return;
     }
@@ -902,6 +999,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
             calories: food.caloriesPerServing,
             carbs: food.carbsPerServing,
             protein: food.proteinPerServing,
+            variant: 'subtle',
           })}
         </div>
       `;
@@ -917,10 +1015,9 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         const caloriesInput = entryForm.querySelector<HTMLInputElement>('#calories');
         const carbsInput = entryForm.querySelector<HTMLInputElement>('#carbs');
         const proteinInput = entryForm.querySelector<HTMLInputElement>('#protein');
-        if (caloriesInput)
-          caloriesInput.value = formatNumber(food.caloriesPerServing).toFixed(2);
-        if (carbsInput) carbsInput.value = formatNumber(food.carbsPerServing).toFixed(2);
-        if (proteinInput) proteinInput.value = formatNumber(food.proteinPerServing).toFixed(2);
+        if (caloriesInput) caloriesInput.value = formatNumberSmart(food.caloriesPerServing);
+        if (carbsInput) carbsInput.value = formatNumberSmart(food.carbsPerServing);
+        if (proteinInput) proteinInput.value = formatNumberSmart(food.proteinPerServing);
         renderFoodSuggestions(food.name);
         updateTotals();
         const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
@@ -946,34 +1043,33 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
           type="text"
           inputmode="decimal"
           placeholder="e.g., 1.25"
-          value="${formatNumber(servings).toFixed(2)}"
+          value="${formatNumberSmart(servings)}"
           required
         />
         <p class="small-text">Enter amount eaten (minimum 0.01).</p>
       </div>
       <div class="totals-panel">
-        <p class="small-text">Totals</p>
         <div id="entry-totals"></div>
       </div>
     </div>
     <div class="macro-grid">
       <div>
         <label for="calories">Calories per serving</label>
-        <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumber(
+        <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumberSmart(
           perServing.calories
-        ).toFixed(2)}" required />
+        )}" required />
       </div>
       <div>
         <label for="carbs">Carbs (g) per serving</label>
-        <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumber(
+        <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumberSmart(
           perServing.carbs
-        ).toFixed(2)}" required />
+        )}" required />
       </div>
       <div>
         <label for="protein">Protein (g) per serving</label>
-        <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumber(
+        <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumberSmart(
           perServing.protein
-        ).toFixed(2)}" required />
+        )}" required />
       </div>
     </div>
     <div class="footer-actions">
@@ -999,7 +1095,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     });
     input.addEventListener('blur', () => {
       const parsed = parseDecimal2(input.value, min);
-      input.value = parsed.toFixed(2);
+      input.value = formatNumberSmart(parsed);
       onChange(parsed);
       updateTotals();
     });
@@ -1032,8 +1128,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   });
 
   entryForm.querySelector('#cancel-edit')?.addEventListener('click', () => {
-    setActiveView('dashboard');
-    renderDashboard();
+    setView('dashboard');
   });
 
   entryForm.addEventListener('submit', async (e) => {
@@ -1047,10 +1142,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     }
     const payload = {
       foodName,
-      servings: formatNumber(servings),
-      caloriesPerServing: formatNumber(perServing.calories),
-      carbsPerServing: formatNumber(perServing.carbs),
-      proteinPerServing: formatNumber(perServing.protein),
+      servings: roundTo2(servings),
+      caloriesPerServing: roundTo2(perServing.calories),
+      carbsPerServing: roundTo2(perServing.carbs),
+      proteinPerServing: roundTo2(perServing.protein),
       createdAt: serverTimestamp(),
     };
 
@@ -1073,13 +1168,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     } else {
       await addDoc(collection(db, 'users', state.user.uid, 'entries', date, 'items'), payload);
     }
-    setActiveView('dashboard');
-    renderDashboard();
+    setView('dashboard');
   });
 };
 
 const renderShellAndRoute = () => {
-  renderDashboard();
+  setView('dashboard');
 };
 
 onAuthStateChanged(auth, (user) => {
@@ -1100,15 +1194,12 @@ appEl.addEventListener('click', (event) => {
     signOut(auth);
   }
   if (target.id === 'nav-dashboard') {
-    setActiveView('dashboard');
-    renderDashboard();
+    setView('dashboard');
   }
   if (target.id === 'nav-foods') {
-    setActiveView('foods');
-    renderFoods();
+    setView('foods');
   }
   if (target.id === 'nav-add-entry') {
-    setActiveView('add-entry');
-    renderEntryForm({ date: state.selectedDate });
+    setView('add-entry', { date: state.selectedDate });
   }
 });
