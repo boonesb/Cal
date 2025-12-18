@@ -26,6 +26,13 @@ a {
   padding: 1rem;
 }
 
+.app-footer {
+  margin-top: 0.5rem;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
 header {
   display: flex;
   align-items: center;
@@ -255,6 +262,13 @@ label {
   width: 100%;
 }
 
+.totals-heading {
+  text-align: center;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 0.5rem;
+}
+
 .small-text {
   font-size: 0.9rem;
   color: #475569;
@@ -315,6 +329,19 @@ label {
   align-items: center;
 }
 
+.chip-row--grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(92px, 1fr));
+  grid-auto-flow: column;
+  gap: 0.45rem;
+  align-items: stretch;
+  justify-items: center;
+}
+
+.chip-row--center {
+  justify-content: center;
+}
+
 .chip {
   padding: 0.35rem 0.5rem;
   background: #eef2ff;
@@ -350,6 +377,15 @@ label {
 
 .chip-value {
   font-weight: 700;
+}
+
+.totals-chip-row .macro-chip {
+  min-width: 90px;
+  justify-content: center;
+  width: 100%;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
 }
 
 input[type='date'] {
@@ -394,6 +430,35 @@ input[type='date'] {
 
 .food-suggestions button:hover {
   background: #ecfeff;
+}
+
+.usda-result {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.usda-result__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.usda-result__title {
+  font-weight: 700;
+}
+
+.usda-result__meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.badge--type {
+  background: #e0f2fe;
+  color: #075985;
+  border: 1px solid #bae6fd;
 }
 
 .food-option {
@@ -501,6 +566,52 @@ input[aria-invalid='true'] {
   margin-top: 0.25rem;
 }
 
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  z-index: 30;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 16px;
+  max-width: 480px;
+  width: min(100%, 520px);
+  padding: 1rem;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.2);
+  display: grid;
+  gap: 0.75rem;
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.modal__body {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.modal__actions {
+  justify-content: flex-end;
+}
+
+.icon-button {
+  padding: 0.35rem 0.5rem;
+}
+
+.usda-modal__summary {
+  display: grid;
+  gap: 0.25rem;
+}
+
 @media (max-width: 640px) {
   #app {
     padding: 0.75rem;
@@ -520,6 +631,15 @@ input[aria-invalid='true'] {
 
   .navbar {
     gap: 0.35rem;
+  }
+
+  .totals-chip-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .totals-chip-row .macro-chip {
+    font-size: 0.85rem;
+    padding: 0.3rem 0.35rem;
   }
 
   .responsive-row {
