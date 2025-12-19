@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@zxing/browser": "^0.1.5",
     "firebase": "^10.14.1",
     "firebase-tools": "^15.0.0"
   },

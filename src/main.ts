@@ -21,6 +21,7 @@ import {
 } from 'firebase/auth';
 import { auth, db } from './firebase';
 import { APP_VERSION, BUILD_TIME_ISO } from './generated/version';
+import { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser';
 
 const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
 
@@ -60,6 +61,14 @@ type Food = {
   carbsPerServing: number;
   proteinPerServing: number;
   favorite: boolean;
+};
+
+type FoodDraft = {
+  name: string;
+  caloriesPerServing: number;
+  carbsPerServing: number;
+  proteinPerServing: number;
+  servingLabel?: string;
 };
 
 type Entry = {
@@ -152,6 +161,7 @@ const parseDecimal2 = (raw: string, min: number) => {
 };
 
 const roundTo2 = (num: number) => Math.round(num * 100) / 100;
+const roundTo1 = (num: number) => Math.round(num * 10) / 10;
 
 const renderMacroChips = (options: {
   calories: number;
@@ -236,6 +246,60 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
   });
 };
 
+const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
+  const response = await fetch(`https://world.openfoodfacts.net/api/v2/product/${encodeURIComponent(barcode)}`);
+  if (!response.ok) {
+    throw new Error('Unable to reach Open Food Facts right now.');
+  }
+  const data = await response.json();
+  if (!data || data.status !== 1 || !data.product) {
+    return null;
+  }
+  const product = data.product;
+  const nutriments = product.nutriments || {};
+  const asNumber = (value: any) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const kjToKcal = (value: number | null) => (value == null ? null : value / 4.184);
+
+  const energyServing = asNumber(nutriments['energy-kcal_serving']) ?? kjToKcal(asNumber(nutriments['energy-kj_serving']));
+  const energy100g = asNumber(nutriments['energy-kcal_100g']) ?? kjToKcal(asNumber(nutriments['energy-kj_100g']));
+  const calories = energyServing ?? energy100g;
+
+  const proteinServing = asNumber(nutriments['proteins_serving']);
+  const protein100g = asNumber(nutriments['proteins_100g']);
+  const carbsServing = asNumber(nutriments['carbohydrates_serving']);
+  const carbs100g = asNumber(nutriments['carbohydrates_100g']);
+
+  if (calories == null && proteinServing == null && protein100g == null && carbsServing == null && carbs100g == null) {
+    return null;
+  }
+
+  const usingServing = energyServing != null || proteinServing != null || carbsServing != null;
+  const servingLabel: string | undefined = usingServing
+    ? (typeof product.serving_size === 'string' && product.serving_size.trim()) || undefined
+    : '100 g';
+
+  const safeCalories = calories != null ? Math.max(0, Math.round(calories)) : 0;
+  const protein = proteinServing ?? protein100g ?? 0;
+  const carbs = carbsServing ?? carbs100g ?? 0;
+  const productName =
+    product.product_name_en ||
+    product.product_name ||
+    product.generic_name_en ||
+    product.generic_name ||
+    'Food item';
+
+  return {
+    name: String(productName),
+    caloriesPerServing: safeCalories,
+    carbsPerServing: roundTo1(Math.max(0, carbs)),
+    proteinPerServing: roundTo1(Math.max(0, protein)),
+    servingLabel,
+  };
+};
+
 const getUserFoods = async () => {
   if (!state.user) return [] as Food[];
   const foodsRef = collection(db, 'users', state.user.uid, 'foods');
@@ -304,6 +368,150 @@ const renderFooter = () => {
 const showLoading = (message = 'Loading...') => {
   setAppContent(`<p>${message}</p>`);
   appEl.appendChild(renderFooter());
+};
+
+const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Promise<void>; onManualEntry: () => void }) => {
+  const overlay = document.createElement('div');
+  overlay.className = 'scan-overlay';
+  const modal = document.createElement('div');
+  modal.className = 'scan-modal';
+  overlay.appendChild(modal);
+
+  let currentStream: MediaStream | null = null;
+  let controls: IScannerControls | undefined;
+  let timeoutId: number | null = null;
+  let hasDetection = false;
+  const reader = new BrowserMultiFormatReader();
+
+  const stopTracks = () => {
+    if (timeoutId) window.clearTimeout(timeoutId);
+    timeoutId = null;
+    if (controls) {
+      controls.stop();
+      controls = undefined;
+    }
+    if (currentStream) {
+      currentStream.getTracks().forEach((track) => track.stop());
+      currentStream = null;
+    }
+  };
+
+  const close = () => {
+    stopTracks();
+    overlay.remove();
+  };
+
+  const renderContent = (html: string) => {
+    modal.innerHTML = html;
+    modal.querySelector('#close-scan')?.addEventListener('click', close);
+    modal.querySelector('#enter-manually')?.addEventListener('click', () => {
+      close();
+      options.onManualEntry();
+    });
+  };
+
+  const renderLookupState = (barcode: string) => {
+    renderContent(`
+      <div class="scan-modal__header">
+        <button class="ghost" id="close-scan">Cancel</button>
+      </div>
+      <div class="scan-modal__body scan-modal__body--lookup">
+        <div class="spinner" aria-hidden="true"></div>
+        <p class="scan-status">Looking up <strong>${barcode}</strong>...</p>
+        <p class="small-text muted">Hold tight while we fetch nutrition details.</p>
+      </div>
+    `);
+  };
+
+  const renderErrorState = (message: string, allowRetry: boolean) => {
+    renderContent(`
+      <div class="scan-modal__header">
+        <button class="ghost" id="close-scan">Cancel</button>
+      </div>
+      <div class="scan-modal__body">
+        <p class="scan-status">${message}</p>
+        <div class="footer-actions">
+          ${allowRetry ? '<button class="secondary" id="retry-scan">Try again</button>' : ''}
+          <button id="enter-manually">Enter manually</button>
+        </div>
+      </div>
+    `);
+    modal.querySelector('#retry-scan')?.addEventListener('click', () => {
+      startScanning();
+    });
+  };
+
+  const startScanning = async () => {
+    stopTracks();
+    hasDetection = false;
+    renderContent(`
+      <div class="scan-modal__header">
+        <button class="ghost" id="close-scan">Cancel</button>
+      </div>
+      <div class="scan-modal__body">
+        <div class="scan-video">
+          <video id="scan-video" autoplay playsinline muted></video>
+        </div>
+        <p class="small-text muted center">Center the barcode in the frame.</p>
+        <div class="footer-actions">
+          <button class="secondary" id="enter-manually">Enter manually</button>
+        </div>
+      </div>
+    `);
+    const videoEl = modal.querySelector<HTMLVideoElement>('#scan-video');
+    if (!videoEl) return;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        renderErrorState('Camera access is not supported in this browser.', false);
+        return;
+      }
+      currentStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+      });
+      videoEl.srcObject = currentStream;
+      await videoEl.play();
+      controls = await reader.decodeFromVideoDevice(undefined, videoEl, (result, error) => {
+        if (result && !hasDetection) {
+          hasDetection = true;
+          const text = result.getText();
+          stopTracks();
+          renderLookupState(text);
+          options
+            .onDetected(text)
+            .then(() => {
+              close();
+            })
+            .catch((err) => {
+              console.error(err);
+              hasDetection = false;
+              renderErrorState('Lookup failed. Check your connection and try again.', true);
+            });
+        }
+        if (error && error.name === 'NotFoundException') {
+          // ignore continuous loop until a barcode is found
+          return;
+        }
+      });
+      timeoutId = window.setTimeout(() => {
+        stopTracks();
+        renderErrorState('No barcode detected. Try again or enter manually.', true);
+      }, 25000);
+    } catch (err: any) {
+      console.error(err);
+      renderErrorState('Camera access blocked. Allow camera to scan or enter manually.', false);
+    }
+  };
+
+  document.body.appendChild(overlay);
+  startScanning();
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      close();
+    }
+  });
+
+  return { close };
 };
 
 const renderLogin = () => {
@@ -607,10 +815,13 @@ const renderFoodForm = (options: {
         <label for="food-name">Name</label>
         <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
       </div>
-      <div class="field-action">
+      <div class="field-action button-stack">
         <button type="button" id="lookup-nutrition" class="secondary ghost">Lookup</button>
+        <button type="button" id="scan-barcode" class="secondary ghost">Scan</button>
       </div>
       <p class="small-text">Editing foods will not change past entries. Lookups use USDA FoodData Central.</p>
+      <div id="serving-context" class="small-text muted"></div>
+      <div id="barcode-status" class="small-text muted"></div>
       <div id="lookup-error" class="error-text"></div>
       <div id="lookup-results" class="food-suggestions"></div>
     </div>
@@ -667,8 +878,38 @@ const renderFoodForm = (options: {
   const carbsInput = form.querySelector<HTMLInputElement>('#carbs');
   const proteinInput = form.querySelector<HTMLInputElement>('#protein');
   const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
+  const scanBtn = form.querySelector<HTMLButtonElement>('#scan-barcode');
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
+  const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
+  const servingContextEl = form.querySelector<HTMLDivElement>('#serving-context');
+
+  const updateServingContext = (label?: string) => {
+    if (servingContextEl) {
+      servingContextEl.textContent = label ? `Serving: ${label}` : '';
+    }
+  };
+
+  const setBarcodeStatus = (message: string) => {
+    if (barcodeStatus) barcodeStatus.textContent = message;
+  };
+
+  const applyDraftFromBarcode = (draft: FoodDraft, barcode?: string) => {
+    caloriesVal = draft.caloriesPerServing;
+    carbsVal = draft.carbsPerServing;
+    proteinVal = draft.proteinPerServing;
+    if (nameInput) nameInput.value = draft.name;
+    if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
+    if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
+    if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
+    updateServingContext(draft.servingLabel);
+    caloriesInput?.focus();
+    setBarcodeStatus(
+      barcode
+        ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
+        : ''
+    );
+  };
 
   const openUsdaModal = (result: UsdaFoodResult) => {
     const overlay = document.createElement('div');
@@ -800,6 +1041,26 @@ const renderFoodForm = (options: {
       lookupBtn.disabled = false;
       lookupBtn.textContent = originalText;
     }
+  });
+
+  scanBtn?.addEventListener('click', () => {
+    createBarcodeScanModal({
+      onDetected: async (barcode) => {
+        const draft = await lookupByBarcode(barcode);
+        if (!draft) {
+          setBarcodeStatus(`No product found for ${barcode}. Enter details manually.`);
+          updateServingContext();
+          nameInput?.focus();
+          return;
+        }
+        applyDraftFromBarcode(draft, barcode);
+      },
+      onManualEntry: () => {
+        setBarcodeStatus('Enter details manually.');
+        updateServingContext();
+        nameInput?.focus();
+      },
+    });
   });
 
   container.innerHTML = '';
