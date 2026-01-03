@@ -133,6 +133,11 @@ const formatNumberSmart = (num: number) => {
   return rounded.toFixed(2).replace(/\.?0+$/, '');
 };
 
+const formatDisplayDate = (ymd: string) => {
+  const date = parseYmdToLocalDate(ymd);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
 const applyViewState = (view: View, payload?: { returnDate?: string }) => {
   if (view === 'add-food') {
     state.returnToEntryAfterFoodSave = Boolean(payload?.returnDate ?? state.returnToEntryAfterFoodSave);
@@ -191,6 +196,32 @@ const renderMacroChips = (options: {
       <div class="${chipClass} macro-chip"><span class="chip-label">protein</span><span class="chip-value">${formatNumberSmart(
         protein
       )} g</span></div>
+    </div>
+  `;
+};
+
+const renderMacroSummary = (options: {
+  calories: number;
+  carbs: number;
+  protein: number;
+  label?: string;
+  variant?: 'hero' | 'compact' | 'inline';
+  className?: string;
+}) => {
+  const { calories, carbs, protein, label, variant = 'compact', className } = options;
+  const caloriesText = `${formatNumberSmart(calories)} kcal`;
+  const carbsText = `${formatNumberSmart(carbs)}g carbs`;
+  const proteinText = `${formatNumberSmart(protein)}g protein`;
+  if (variant === 'inline') {
+    return `<div class="macro-inline ${className ?? ''}">${caloriesText} • ${carbsText} • ${proteinText}</div>`;
+  }
+  const classes = ['macro-summary', `macro-summary--${variant}`];
+  if (className) classes.push(className);
+  return `
+    <div class="${classes.join(' ')}">
+      ${label ? `<div class="macro-summary__label">${label}</div>` : ''}
+      <div class="macro-summary__primary">${caloriesText}</div>
+      <div class="macro-summary__secondary">${carbsText} • ${proteinText}</div>
     </div>
   `;
 };
@@ -368,6 +399,46 @@ const renderFooter = () => {
 const showLoading = (message = 'Loading...') => {
   setAppContent(`<p>${message}</p>`);
   appEl.appendChild(renderFooter());
+};
+
+const confirmDialog = (options: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: 'danger' | 'default';
+}) => {
+  const { title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', tone = 'default' } = options;
+  return new Promise<boolean>((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal modal--confirm">
+        <div class="modal__header">
+          <h3>${title}</h3>
+          <button type="button" class="ghost icon-button" data-close>✕</button>
+        </div>
+        <div class="modal__body">
+          <p class="small-text muted">${message}</p>
+        </div>
+        <div class="footer-actions modal__actions">
+          <button type="button" class="secondary" data-cancel>${cancelLabel}</button>
+          <button type="button" class="${tone === 'danger' ? 'danger ghost' : ''}" data-confirm>${confirmLabel}</button>
+        </div>
+      </div>
+    `;
+    const cleanup = (result: boolean) => {
+      overlay.remove();
+      resolve(result);
+    };
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) cleanup(false);
+    });
+    overlay.querySelector('[data-close]')?.addEventListener('click', () => cleanup(false));
+    overlay.querySelector('[data-cancel]')?.addEventListener('click', () => cleanup(false));
+    overlay.querySelector('[data-confirm]')?.addEventListener('click', () => cleanup(true));
+    document.body.appendChild(overlay);
+  });
 };
 
 const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Promise<void>; onManualEntry: () => void }) => {
@@ -570,24 +641,32 @@ const renderNav = () => {
     return state.currentView === view ? 'active' : '';
   };
   const header = document.createElement('header');
-  const title = document.createElement('h1');
-  title.textContent = 'Calorie Tracker';
-  const nav = document.createElement('div');
-  nav.className = 'navbar';
-  nav.innerHTML = `
-    <button id="nav-dashboard" class="${navActive('dashboard')}">Dashboard</button>
-    <button class="secondary ${navActive('foods')}" id="nav-foods">Foods</button>
-    <button class="secondary ${navActive('entry')}" id="nav-add-entry">Add entry</button>
-    <button class="secondary" id="nav-signout">Sign out</button>
+  header.className = 'app-header';
+  header.innerHTML = `
+    <div class="header-main">
+      <h1>Calorie Tracker</h1>
+      <div class="header-actions">
+        <button id="nav-add-entry" class="primary-cta ${navActive('entry')}">Add entry</button>
+        <div class="menu" id="nav-menu-wrapper">
+          <button id="nav-menu-toggle" class="icon-button ghost" aria-haspopup="true" aria-expanded="false">⋯</button>
+          <div id="nav-menu" class="menu-popover" role="menu">
+            <button id="nav-signout" class="menu-item" role="menuitem">Sign out</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <nav class="tabs" aria-label="Primary">
+      <button id="nav-dashboard" class="tab ${navActive('dashboard')}">Dashboard</button>
+      <button id="nav-foods" class="tab ${navActive('foods')}">Foods</button>
+    </nav>
   `;
-  header.appendChild(title);
-  header.appendChild(nav);
   return header;
 };
 
 const buildShell = () => {
   setAppContent('');
   appEl.appendChild(renderNav());
+  setNavMenuOpen(false);
   const main = document.createElement('div');
   main.id = 'view-container';
   appEl.appendChild(main);
@@ -636,19 +715,41 @@ const handleMobileChange = () => {
 };
 mobileQuery.addEventListener('change', handleMobileChange);
 
+let navMenuOpen = false;
+const setNavMenuOpen = (open: boolean) => {
+  navMenuOpen = open;
+  const wrapper = document.querySelector<HTMLDivElement>('#nav-menu-wrapper');
+  const menu = document.querySelector<HTMLDivElement>('#nav-menu');
+  const toggle = document.querySelector<HTMLButtonElement>('#nav-menu-toggle');
+  if (wrapper) {
+    wrapper.classList.toggle('menu--open', open);
+  }
+  if (menu) {
+    menu.setAttribute('data-open', open ? 'true' : 'false');
+  }
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+};
+
+document.addEventListener('click', (event) => {
+  if (!navMenuOpen) return;
+  const target = event.target as HTMLElement;
+  if (target.closest('#nav-menu') || target.closest('#nav-menu-toggle')) return;
+  setNavMenuOpen(false);
+});
+
 const renderTotals = (entries: Entry[]) => {
   const totals = sumEntries(entries);
   return `
     <div class="totals">
-      <div class="total-card">
-        <div class="totals-heading">Daily totals</div>
-        ${renderMacroChips({
+      <div class="total-card total-card--hero">
+        ${renderMacroSummary({
           calories: totals.calories,
           carbs: totals.carbs,
           protein: totals.protein,
-          layout: 'grid',
-          align: 'center',
-          className: 'totals-chip-row',
+          label: 'Daily totals',
+          variant: 'hero',
         })}
       </div>
     </div>
@@ -666,12 +767,18 @@ const renderDashboard = async (dateOverride?: string) => {
       <div class="dashboard-header">
         <div>
           <p class="small-text">Daily dashboard</p>
-          <h2 id="selected-date">${state.selectedDate}</h2>
+          <h2 id="selected-date">${formatDisplayDate(state.selectedDate)}</h2>
         </div>
-        <div class="date-controls">
-          <button id="prev-day" class="secondary">◀</button>
-          <input type="date" id="date-picker" value="${state.selectedDate}" />
-          <button id="next-day" class="secondary">▶</button>
+        <div class="date-row">
+          <button id="date-display" class="date-display" type="button" aria-label="Select date">
+            <span class="date-value">${formatDisplayDate(state.selectedDate)}</span>
+            <span class="date-caret">▼</span>
+          </button>
+          <div class="date-controls">
+            <button id="prev-day" class="ghost icon-button" aria-label="Previous day">‹</button>
+            <button id="next-day" class="ghost icon-button" aria-label="Next day">›</button>
+          </div>
+          <input type="date" id="date-picker" class="visually-hidden" value="${state.selectedDate}" />
         </div>
       </div>
       <div id="totals"></div>
@@ -696,6 +803,16 @@ const renderDashboard = async (dateOverride?: string) => {
 
   container.querySelector('#next-day')?.addEventListener('click', () => {
     updateDate(addDays(state.selectedDate, 1));
+  });
+
+  container.querySelector('#date-display')?.addEventListener('click', () => {
+    const picker = container.querySelector<HTMLInputElement>('#date-picker');
+    if (!picker) return;
+    if ('showPicker' in picker) {
+      (picker as HTMLInputElement & { showPicker?: () => void }).showPicker?.();
+    } else {
+      picker.focus();
+    }
   });
 
   container.querySelector<HTMLInputElement>('#date-picker')?.addEventListener('change', (e) => {
@@ -727,24 +844,24 @@ const renderDashboard = async (dateOverride?: string) => {
       const carbs = entry.servings * entry.carbsPerServing;
       const protein = entry.servings * entry.proteinPerServing;
       return `
-        <li class="entry-row">
+        <li class="entry-card">
           <div class="entry-main">
-            <strong>${entry.foodName}</strong>
-            <div class="small-text">${formatNumberSmart(entry.servings)} serving(s)</div>
-          </div>
-          <div class="entry-meta">
-            ${renderMacroChips({ calories, carbs, protein, variant: 'subtle' })}
-            <div class="entry-actions">
-              <button class="secondary" data-edit="${entry.id}">Edit</button>
-              <button class="danger" data-delete="${entry.id}">Delete</button>
+            <div>
+              <div class="entry-title">${entry.foodName}</div>
+              <div class="small-text muted">${formatNumberSmart(entry.servings)} serving(s)</div>
             </div>
+            ${renderMacroSummary({ calories, carbs, protein, variant: 'compact' })}
+          </div>
+          <div class="entry-actions">
+            <button class="secondary" data-edit="${entry.id}">Edit</button>
+            <button class="ghost icon-button" data-delete="${entry.id}" aria-label="Delete entry">🗑</button>
           </div>
         </li>
       `;
     })
     .join('');
 
-  entriesList.innerHTML = `<ul class="list">${rows}</ul>`;
+  entriesList.innerHTML = `<ul class="entry-list">${rows}</ul>`;
 
   entriesList.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -758,7 +875,12 @@ const renderDashboard = async (dateOverride?: string) => {
     btn.addEventListener('click', async () => {
       const entryId = btn.dataset.delete;
       if (!entryId || !state.user) return;
-      const confirmed = confirm('Delete this entry?');
+      const confirmed = await confirmDialog({
+        title: 'Delete entry?',
+        message: 'This entry will be removed from your daily log.',
+        confirmLabel: 'Delete entry',
+        tone: 'danger',
+      });
       if (!confirmed) return;
       const entryRef = doc(db, 'users', state.user.uid, 'entries', state.selectedDate, 'items', entryId);
       await deleteDoc(entryRef);
@@ -808,22 +930,28 @@ const renderFoodForm = (options: {
   let carbsVal = food?.carbsPerServing ?? 0;
   let proteinVal = food?.proteinPerServing ?? 0;
   const form = document.createElement('form');
-  form.className = 'form-grid';
+  form.className = 'form-grid form-grid--stack';
   form.innerHTML = `
-    <div class="field-group inline-action">
-      <div class="field-main">
+    <div class="form-section">
+      <div class="section-heading">
+        <p class="section-eyebrow">Lookup or scan</p>
+        <h3>Food details</h3>
+      </div>
+      <div class="field-group">
         <label for="food-name">Name</label>
         <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
       </div>
-      <div class="field-action button-stack">
-        <button type="button" id="lookup-nutrition" class="secondary ghost">Lookup</button>
-        <button type="button" id="scan-barcode" class="secondary ghost">Scan</button>
+      <div class="lookup-panel">
+        <div class="lookup-actions">
+          <button type="button" id="lookup-nutrition" class="secondary ghost">🔎 Lookup</button>
+          <button type="button" id="scan-barcode" class="secondary ghost">📷 Scan</button>
+        </div>
+        <p class="small-text muted">Editing foods will not change past entries. Lookups use USDA FoodData Central.</p>
+        <div id="serving-context" class="small-text muted"></div>
+        <div id="barcode-status" class="small-text muted"></div>
+        <div id="lookup-error" class="error-text"></div>
+        <div id="lookup-results" class="lookup-results"></div>
       </div>
-      <p class="small-text">Editing foods will not change past entries. Lookups use USDA FoodData Central.</p>
-      <div id="serving-context" class="small-text muted"></div>
-      <div id="barcode-status" class="small-text muted"></div>
-      <div id="lookup-error" class="error-text"></div>
-      <div id="lookup-results" class="food-suggestions"></div>
     </div>
     <div class="macro-grid">
       <div>
@@ -883,12 +1011,24 @@ const renderFoodForm = (options: {
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
   const servingContextEl = form.querySelector<HTMLDivElement>('#serving-context');
+  const lookupPanel = form.querySelector<HTMLDivElement>('.lookup-panel');
 
   const updateServingContext = (label?: string) => {
     if (servingContextEl) {
       servingContextEl.textContent = label ? `Serving: ${label}` : '';
     }
   };
+
+  const setLookupCollapsed = (collapsed: boolean) => {
+    lookupPanel?.classList.toggle('lookup-panel--collapsed', collapsed);
+  };
+
+  const clearLookupResults = () => {
+    if (lookupResults) lookupResults.innerHTML = '';
+    setLookupCollapsed(true);
+  };
+
+  setLookupCollapsed(true);
 
   const setBarcodeStatus = (message: string) => {
     if (barcodeStatus) barcodeStatus.textContent = message;
@@ -909,6 +1049,7 @@ const renderFoodForm = (options: {
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
+    clearLookupResults();
   };
 
   const openUsdaModal = (result: UsdaFoodResult) => {
@@ -958,6 +1099,7 @@ const renderFoodForm = (options: {
       if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
       if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
       removeModal();
+      clearLookupResults();
     });
     document.body.appendChild(overlay);
     gramsInput?.focus();
@@ -993,6 +1135,7 @@ const renderFoodForm = (options: {
   const renderLookupResults = (results: UsdaFoodResult[]) => {
     if (!lookupResults) return;
     lookupResults.innerHTML = '';
+    setLookupCollapsed(false);
     results.forEach((result) => {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1017,6 +1160,7 @@ const renderFoodForm = (options: {
     const term = nameInput.value.trim();
     lookupError.textContent = '';
     lookupResults.innerHTML = '';
+    setLookupCollapsed(false);
     if (!term) {
       lookupError.textContent = 'Enter a food name to search.';
       return;
@@ -1151,61 +1295,38 @@ const renderFoods = async () => {
     const sorted = foods
       .slice()
       .sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1));
+    const favorites = sorted.filter((food) => food.favorite);
+    const others = sorted.filter((food) => !food.favorite);
 
-    if (state.isMobile) {
-      const cards = sorted
+    const renderCards = (items: Food[]) =>
+      items
         .map(
           (food) => `
             <div class="food-card">
-              <div class="food-card__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
-              <div class="small-text muted">Per serving</div>
-              ${renderMacroChips({
-                calories: food.caloriesPerServing,
-                carbs: food.carbsPerServing,
-                protein: food.proteinPerServing,
-                variant: 'subtle',
-              })}
+              <button class="food-card__main" data-edit="${food.id}">
+                <div class="food-card__title">
+                  <span>${food.name}</span>
+                </div>
+                ${renderMacroSummary({
+                  calories: food.caloriesPerServing,
+                  carbs: food.carbsPerServing,
+                  protein: food.proteinPerServing,
+                  variant: 'inline',
+                })}
+              </button>
               <div class="food-card__actions">
-                <button class="secondary" data-edit="${food.id}">Edit</button>
-                <button class="secondary" data-favorite="${food.id}">${food.favorite ? 'Unfavorite' : 'Favorite'}</button>
-                <button class="danger ghost" data-delete="${food.id}">Delete</button>
+                <button class="icon-button ghost favorite-toggle ${food.favorite ? 'is-active' : ''}" data-favorite="${
+            food.id
+          }" aria-label="${food.favorite ? 'Unfavorite' : 'Favorite'}">${food.favorite ? '★' : '☆'}</button>
+                <button class="icon-button ghost" data-delete="${food.id}" aria-label="Delete food">🗑</button>
               </div>
             </div>`
         )
         .join('');
-      listEl.innerHTML = cards;
-      return;
-    }
-
-    const rows = sorted
-      .map(
-        (food) => `
-        <div class="food-row">
-          <div class="food-row__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
-          <div class="food-row__macros">
-            ${renderMacroChips({
-              calories: food.caloriesPerServing,
-              carbs: food.carbsPerServing,
-              protein: food.proteinPerServing,
-              variant: 'subtle',
-            })}
-          </div>
-          <div class="food-row__actions">
-            <button class="secondary" data-edit="${food.id}">Edit</button>
-            <button class="secondary" data-favorite="${food.id}">${food.favorite ? 'Unfavorite' : 'Favorite'}</button>
-            <button class="danger ghost" data-delete="${food.id}">Delete</button>
-          </div>
-        </div>`
-      )
-      .join('');
 
     listEl.innerHTML = `
-      <div class="food-row food-row--header">
-        <div>Name</div>
-        <div>Per serving</div>
-        <div>Actions</div>
-      </div>
-      <div class="food-row-group">${rows}</div>
+      ${favorites.length ? `<div class="list-section"><h3>Favorites</h3>${renderCards(favorites)}</div>` : ''}
+      ${others.length ? `<div class="list-section"><h3>All foods</h3>${renderCards(others)}</div>` : ''}
     `;
   };
 
@@ -1238,7 +1359,12 @@ const renderFoods = async () => {
     }
     if (button.dataset.delete) {
       if (!state.user) return;
-      const confirmed = confirm('Delete this food? Historical entries will keep their stored nutrition snapshot.');
+      const confirmed = await confirmDialog({
+        title: 'Delete this food?',
+        message: 'Historical entries will keep their stored nutrition snapshot.',
+        confirmLabel: 'Delete food',
+        tone: 'danger',
+      });
       if (!confirmed) return;
       const foodRef = doc(db, 'users', state.user.uid, 'foods', currentFood.id);
       await deleteDoc(foodRef);
@@ -1256,12 +1382,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
-      <div class="flex space-between back-row">
+      <div class="compact-header back-row">
+        <button id="back-dashboard" class="ghost back-link">← Back</button>
         <div>
           <p class="small-text">${entryId ? 'Edit entry' : 'Add entry'}</p>
-          <h2>${date}</h2>
+          <h2>${formatDisplayDate(date)}</h2>
         </div>
-        <button id="back-dashboard" class="ghost back-link">← Back</button>
       </div>
       <form id="entry-form" class="form-grid"></form>
     </section>
@@ -1317,21 +1443,29 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     const protein = servings * perServing.protein;
     const totalsEl = entryForm.querySelector('#entry-totals');
     if (totalsEl) {
-      totalsEl.innerHTML = renderMacroChips({ calories, carbs, protein, label: 'Totals' });
+      totalsEl.innerHTML = renderMacroSummary({
+        calories,
+        carbs,
+        protein,
+        variant: 'compact',
+        label: 'This entry',
+      });
     }
   };
 
   const renderFoodSuggestions = (term: string) => {
     const suggestionEl = entryForm.querySelector<HTMLDivElement>('#food-suggestions');
+    const selectedSummary = entryForm.querySelector<HTMLDivElement>('#selected-food-summary');
     if (!suggestionEl) return;
     const filtered = sortFoodsForPicker(foods, term);
     if (filtered.length === 0 && term.trim()) {
-      suggestionEl.innerHTML = `<div class="food-suggestions"><button type="button" id="create-food-inline">Create "${term}"</button></div>`;
+      suggestionEl.innerHTML = `<div class="food-suggestions"><button type="button" id="create-food-inline" class="food-option-button">Create "${term}"</button></div>`;
       suggestionEl.querySelector('#create-food-inline')?.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
         setView('add-food', { prefillName: term, returnDate: date });
       });
+      if (selectedSummary) selectedSummary.textContent = '';
       return;
     }
     suggestionEl.innerHTML = '<div class="food-suggestions"></div>';
@@ -1339,14 +1473,18 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     filtered.forEach((food) => {
       const btn = document.createElement('button');
       btn.type = 'button';
+      const isSelected = selectedFood?.id === food.id;
+      btn.className = `food-option-button ${isSelected ? 'is-selected' : ''}`;
+      btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
       btn.innerHTML = `
         <div class="food-option">
           <div class="food-option__title">${food.favorite ? '<span class="favorite">★</span>' : ''}${food.name}</div>
-          ${renderMacroChips({
+          ${renderMacroSummary({
             calories: food.caloriesPerServing,
             carbs: food.carbsPerServing,
             protein: food.proteinPerServing,
-            variant: 'subtle',
+            variant: 'inline',
+            className: 'food-option__summary',
           })}
         </div>
       `;
@@ -1367,56 +1505,85 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         if (proteinInput) proteinInput.value = formatNumberSmart(food.proteinPerServing);
         renderFoodSuggestions(food.name);
         updateTotals();
+        if (!macroEditorWasToggled) {
+          setMacroEditorOpen(false);
+        }
         const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
         servingsInput?.focus();
       });
       list?.appendChild(btn);
     });
+    if (selectedSummary && selectedFood) {
+      selectedSummary.textContent = `Using saved macros for ${selectedFood.name}.`;
+    } else if (selectedSummary) {
+      selectedSummary.textContent = '';
+    }
   };
 
+  entryForm.classList.add('form-grid--stack', 'entry-form');
   entryForm.innerHTML = `
-    <div class="field-group">
-      <label for="food">Food</label>
-      <input id="food" name="food" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
-      <p class="small-text">Favorites show by default; type to search your foods.</p>
-      <div id="food-suggestions"></div>
-    </div>
-    <div class="responsive-row">
-      <div>
-        <label for="servings">Servings</label>
-        <input
-          id="servings"
-          name="servings"
-          type="text"
-          inputmode="decimal"
-          placeholder="e.g., 1.25"
-          value="${formatNumberSmart(servings)}"
-          required
-        />
-        <p class="small-text">Enter amount eaten (minimum 0.01).</p>
+    <div class="form-section">
+      <div class="section-heading">
+        <p class="section-eyebrow">Step 1</p>
+        <h3>Choose food</h3>
+        <p class="small-text muted">Favorites show by default. Type to search your foods.</p>
       </div>
-      <div class="totals-panel">
-        <div id="entry-totals"></div>
+      <div class="field-group">
+        <label for="food">Food</label>
+        <input id="food" name="food" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
+        <div id="selected-food-summary" class="small-text muted"></div>
+        <div id="food-suggestions"></div>
       </div>
     </div>
-    <div class="macro-grid">
-      <div>
-        <label for="calories">Calories per serving</label>
-        <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumberSmart(
-          perServing.calories
-        )}" required />
+    <div class="form-section">
+      <div class="section-heading">
+        <p class="section-eyebrow">Step 2</p>
+        <h3>Servings</h3>
       </div>
-      <div>
-        <label for="carbs">Carbs (g) per serving</label>
-        <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumberSmart(
-          perServing.carbs
-        )}" required />
+      <div class="responsive-row">
+        <div>
+          <label for="servings">Servings</label>
+          <input
+            id="servings"
+            name="servings"
+            type="text"
+            inputmode="decimal"
+            placeholder="e.g., 1.25"
+            value="${formatNumberSmart(servings)}"
+            required
+          />
+          <p class="small-text muted">Enter amount eaten (minimum 0.01).</p>
+        </div>
+        <div class="totals-panel">
+          <div id="entry-totals"></div>
+        </div>
       </div>
-      <div>
-        <label for="protein">Protein (g) per serving</label>
-        <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumberSmart(
-          perServing.protein
-        )}" required />
+      <button type="button" id="toggle-macros" class="ghost small-button">Edit macros</button>
+    </div>
+    <div id="macro-editor" class="form-section">
+      <div class="section-heading">
+        <p class="section-eyebrow">Step 3</p>
+        <h3>Per-serving macros</h3>
+      </div>
+      <div class="macro-grid">
+        <div>
+          <label for="calories">Calories per serving</label>
+          <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumberSmart(
+            perServing.calories
+          )}" required />
+        </div>
+        <div>
+          <label for="carbs">Carbs (g) per serving</label>
+          <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumberSmart(
+            perServing.carbs
+          )}" required />
+        </div>
+        <div>
+          <label for="protein">Protein (g) per serving</label>
+          <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumberSmart(
+            perServing.protein
+          )}" required />
+        </div>
       </div>
     </div>
     <div class="footer-actions">
@@ -1427,6 +1594,26 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   renderFoodSuggestions(typedName);
   updateTotals();
+
+  const macroEditor = entryForm.querySelector<HTMLDivElement>('#macro-editor');
+  const toggleMacrosBtn = entryForm.querySelector<HTMLButtonElement>('#toggle-macros');
+  let macroEditorOpen = Boolean(entryId) || !selectedFood;
+  let macroEditorWasToggled = false;
+
+  const setMacroEditorOpen = (open: boolean, userToggle = false) => {
+    macroEditorOpen = open;
+    if (userToggle) macroEditorWasToggled = true;
+    macroEditor?.classList.toggle('is-hidden', !open);
+    if (toggleMacrosBtn) {
+      toggleMacrosBtn.textContent = open ? 'Hide macros' : 'Edit macros';
+    }
+  };
+
+  setMacroEditorOpen(macroEditorOpen);
+
+  toggleMacrosBtn?.addEventListener('click', () => {
+    setMacroEditorOpen(!macroEditorOpen, true);
+  });
 
   const attachDecimalInput = (
     selector: string,
@@ -1472,6 +1659,9 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     typedName = (e.target as HTMLInputElement).value;
     selectedFood = undefined;
     renderFoodSuggestions(typedName);
+    if (!macroEditorWasToggled) {
+      setMacroEditorOpen(true);
+    }
   });
 
   entryForm.querySelector('#cancel-edit')?.addEventListener('click', () => {
@@ -1537,16 +1727,24 @@ onAuthStateChanged(auth, (user) => {
 
 appEl.addEventListener('click', (event) => {
   const target = event.target as HTMLElement;
+  if (target.id === 'nav-menu-toggle') {
+    event.stopPropagation();
+    setNavMenuOpen(!navMenuOpen);
+  }
   if (target.id === 'nav-signout') {
     signOut(auth);
+    setNavMenuOpen(false);
   }
   if (target.id === 'nav-dashboard') {
     setView('dashboard');
+    setNavMenuOpen(false);
   }
   if (target.id === 'nav-foods') {
     setView('foods');
+    setNavMenuOpen(false);
   }
   if (target.id === 'nav-add-entry') {
     setView('add-entry', { date: state.selectedDate });
+    setNavMenuOpen(false);
   }
 });
