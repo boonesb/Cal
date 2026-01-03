@@ -929,59 +929,96 @@ const renderFoodForm = (options: {
   let caloriesVal = food?.caloriesPerServing ?? 0;
   let carbsVal = food?.carbsPerServing ?? 0;
   let proteinVal = food?.proteinPerServing ?? 0;
+  let servingLabel: string | undefined;
+  let previousDraft: FoodDraft | null = null;
+  const scanSupported = Boolean(navigator.mediaDevices?.getUserMedia);
   const form = document.createElement('form');
   form.className = 'form-grid form-grid--stack';
   form.innerHTML = `
-    <div class="form-section">
+    <div class="form-section find-section">
       <div class="section-heading">
-        <p class="section-eyebrow">Lookup or scan</p>
-        <h3>Food details</h3>
+        <p class="section-eyebrow">Find your food</p>
+        <h3>Find your food</h3>
+        <p class="small-text muted">We’ll fill calories and macros for you.</p>
       </div>
-      <div class="field-group">
-        <label for="food-name">Name</label>
-        <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
-      </div>
-      <div class="lookup-panel">
-        <div class="lookup-actions">
-          <button type="button" id="lookup-nutrition" class="secondary ghost">🔎 Lookup</button>
-          <button type="button" id="scan-barcode" class="secondary ghost">📷 Scan</button>
+      <div class="find-actions">
+        <div class="find-card" id="lookup-card">
+          <div class="field-group">
+            <label for="lookup-term">Search USDA by name</label>
+            <p class="small-text muted">Search USDA FoodData Central and autofill fields.</p>
+            <div class="lookup-input-row">
+              <input id="lookup-term" name="lookupTerm" placeholder="Search foods by name" value="${prefillName ?? ''}" />
+              <button type="button" id="lookup-nutrition" class="secondary">Lookup</button>
+            </div>
+          </div>
+          <div id="lookup-error" class="error-text"></div>
+          <div id="lookup-results" class="lookup-results lookup-results--collapsed" aria-live="polite"></div>
         </div>
-        <p class="small-text muted">Editing foods will not change past entries. Lookups use USDA FoodData Central.</p>
+        ${
+          scanSupported
+            ? `
+            <div class="find-card" id="scan-card">
+              <div class="field-group">
+                <label>Scan barcode to fill details</label>
+                <p class="small-text muted">Use your camera to find packaged foods and autofill fields.</p>
+                <button type="button" id="scan-barcode" class="secondary">Scan barcode</button>
+              </div>
+              <div id="barcode-status" class="small-text muted"></div>
+            </div>
+          `
+            : ''
+        }
+      </div>
+      <div class="autofill-meta">
         <div id="serving-context" class="small-text muted"></div>
-        <div id="barcode-status" class="small-text muted"></div>
-        <div id="lookup-error" class="error-text"></div>
-        <div id="lookup-results" class="lookup-results"></div>
+        <div id="autofill-status" class="autofill-status is-hidden" role="status">
+          <span id="autofill-status-text"></span>
+          <button type="button" class="ghost small-button" id="autofill-reset">Reset to previous values</button>
+        </div>
       </div>
     </div>
-    <div class="macro-grid">
-      <div>
-        <label for="calories">Calories / serving</label>
-        <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
-          caloriesVal
-        )}" />
+    <div class="form-section manual-section">
+      <div class="section-heading">
+        <p class="section-eyebrow">Or enter it manually</p>
+        <h3>Or enter it manually</h3>
+        <p class="small-text muted">Use this when you can’t find an exact match.</p>
       </div>
-      <div>
-        <label for="carbs">Carbs (g) / serving</label>
-        <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
-          carbsVal
-        )}" />
+      <div class="manual-card">
+        <div class="field-group">
+          <label for="food-name">Name</label>
+          <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
+        </div>
+        <div class="macro-grid">
+          <div>
+            <label for="calories">Calories / serving</label>
+            <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
+              caloriesVal
+            )}" />
+          </div>
+          <div>
+            <label for="carbs">Carbs (g) / serving</label>
+            <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
+              carbsVal
+            )}" />
+          </div>
+          <div>
+            <label for="protein">Protein (g) / serving</label>
+            <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
+              proteinVal
+            )}" />
+          </div>
+        </div>
+        <div>
+          <label for="favorite">Favorite</label>
+          <select id="favorite" name="favorite">
+            <option value="false" ${!food?.favorite ? 'selected' : ''}>No</option>
+            <option value="true" ${food?.favorite ? 'selected' : ''}>Yes</option>
+          </select>
+        </div>
       </div>
-      <div>
-        <label for="protein">Protein (g) / serving</label>
-        <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
-          proteinVal
-        )}" />
+      <div class="footer-actions">
+        <button type="submit">Save food</button>
       </div>
-    </div>
-    <div>
-      <label for="favorite">Favorite</label>
-      <select id="favorite" name="favorite">
-        <option value="false" ${!food?.favorite ? 'selected' : ''}>No</option>
-        <option value="true" ${food?.favorite ? 'selected' : ''}>Yes</option>
-      </select>
-    </div>
-    <div class="footer-actions">
-      <button type="submit">Save food</button>
     </div>
   `;
 
@@ -1002,6 +1039,7 @@ const renderFoodForm = (options: {
   });
 
   const nameInput = form.querySelector<HTMLInputElement>('#food-name');
+  const lookupInput = form.querySelector<HTMLInputElement>('#lookup-term');
   const caloriesInput = form.querySelector<HTMLInputElement>('#calories');
   const carbsInput = form.querySelector<HTMLInputElement>('#carbs');
   const proteinInput = form.querySelector<HTMLInputElement>('#protein');
@@ -1011,16 +1049,19 @@ const renderFoodForm = (options: {
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
   const servingContextEl = form.querySelector<HTMLDivElement>('#serving-context');
-  const lookupPanel = form.querySelector<HTMLDivElement>('.lookup-panel');
+  const autofillStatus = form.querySelector<HTMLDivElement>('#autofill-status');
+  const autofillStatusText = form.querySelector<HTMLSpanElement>('#autofill-status-text');
+  const autofillReset = form.querySelector<HTMLButtonElement>('#autofill-reset');
 
   const updateServingContext = (label?: string) => {
+    servingLabel = label;
     if (servingContextEl) {
       servingContextEl.textContent = label ? `Serving: ${label}` : '';
     }
   };
 
   const setLookupCollapsed = (collapsed: boolean) => {
-    lookupPanel?.classList.toggle('lookup-panel--collapsed', collapsed);
+    lookupResults?.classList.toggle('lookup-results--collapsed', collapsed);
   };
 
   const clearLookupResults = () => {
@@ -1034,7 +1075,58 @@ const renderFoodForm = (options: {
     if (barcodeStatus) barcodeStatus.textContent = message;
   };
 
+  const setAutofillStatus = (message: string, allowReset: boolean) => {
+    if (!autofillStatus || !autofillStatusText || !autofillReset) return;
+    autofillStatusText.textContent = message;
+    autofillStatus.classList.remove('is-hidden');
+    autofillReset.classList.toggle('is-hidden', !allowReset);
+  };
+
+  const captureCurrentDraft = (): FoodDraft => ({
+    name: nameInput?.value ?? '',
+    caloriesPerServing: caloriesVal,
+    carbsPerServing: carbsVal,
+    proteinPerServing: proteinVal,
+    servingLabel,
+  });
+
+  const restoreDraft = (draft: FoodDraft) => {
+    caloriesVal = draft.caloriesPerServing;
+    carbsVal = draft.carbsPerServing;
+    proteinVal = draft.proteinPerServing;
+    if (nameInput) nameInput.value = draft.name;
+    if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
+    if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
+    if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
+    updateServingContext(draft.servingLabel);
+  };
+
+  const confirmOverwriteIfNeeded = async (sourceLabel: string) => {
+    if (!food) return true;
+    const hasData =
+      Boolean(nameInput?.value.trim()) ||
+      Boolean(caloriesInput?.value.trim()) ||
+      Boolean(carbsInput?.value.trim()) ||
+      Boolean(proteinInput?.value.trim());
+    if (!hasData) return true;
+    return confirmDialog({
+      title: `Overwrite current details?`,
+      message: `This will replace the nutrition values with the ${sourceLabel} result.`,
+      confirmLabel: 'Overwrite',
+      cancelLabel: 'Cancel',
+    });
+  };
+
+  const applyDraftFromLookup = (draft: FoodDraft) => {
+    previousDraft = captureCurrentDraft();
+    restoreDraft(draft);
+    setAutofillStatus('Filled from USDA lookup.', Boolean(previousDraft));
+    clearLookupResults();
+    nameInput?.focus();
+  };
+
   const applyDraftFromBarcode = (draft: FoodDraft, barcode?: string) => {
+    previousDraft = captureCurrentDraft();
     caloriesVal = draft.caloriesPerServing;
     carbsVal = draft.carbsPerServing;
     proteinVal = draft.proteinPerServing;
@@ -1049,6 +1141,7 @@ const renderFoodForm = (options: {
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
+    setAutofillStatus('Filled from barcode scan.', Boolean(previousDraft));
     clearLookupResults();
   };
 
@@ -1089,17 +1182,22 @@ const renderFoodForm = (options: {
     overlay.querySelector('#close-usda-modal')?.addEventListener('click', removeModal);
     const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
     const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
-    applyBtn?.addEventListener('click', () => {
+    applyBtn?.addEventListener('click', async () => {
+      const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
+      if (!confirmed) return;
       const gramsVal = parseDecimal2(gramsInput?.value ?? '0', 1);
       const factor = gramsVal / 100;
-      caloriesVal = roundTo2(result.calories * factor);
-      carbsVal = roundTo2(result.carbs * factor);
-      proteinVal = roundTo2(result.protein * factor);
-      if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
-      if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
-      if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
+      const draft: FoodDraft = {
+        name: result.description,
+        caloriesPerServing: roundTo2(result.calories * factor),
+        carbsPerServing: roundTo2(result.carbs * factor),
+        proteinPerServing: roundTo2(result.protein * factor),
+        servingLabel: `${formatNumberSmart(gramsVal)} g`,
+      };
+      applyDraftFromLookup(draft);
+      if (lookupInput) lookupInput.value = result.description;
+      setBarcodeStatus('');
       removeModal();
-      clearLookupResults();
     });
     document.body.appendChild(overlay);
     gramsInput?.focus();
@@ -1156,8 +1254,8 @@ const renderFoodForm = (options: {
   };
 
   lookupBtn?.addEventListener('click', async () => {
-    if (!nameInput || !lookupError || !lookupResults || !lookupBtn) return;
-    const term = nameInput.value.trim();
+    if (!lookupInput || !lookupError || !lookupResults || !lookupBtn) return;
+    const term = lookupInput.value.trim();
     lookupError.textContent = '';
     lookupResults.innerHTML = '';
     setLookupCollapsed(false);
@@ -1187,6 +1285,14 @@ const renderFoodForm = (options: {
     }
   });
 
+  autofillReset?.addEventListener('click', () => {
+    if (!previousDraft) return;
+    restoreDraft(previousDraft);
+    setAutofillStatus('Restored previous values.', false);
+    previousDraft = null;
+    setBarcodeStatus('');
+  });
+
   scanBtn?.addEventListener('click', () => {
     createBarcodeScanModal({
       onDetected: async (barcode) => {
@@ -1197,6 +1303,8 @@ const renderFoodForm = (options: {
           nameInput?.focus();
           return;
         }
+        const confirmed = await confirmOverwriteIfNeeded('barcode scan');
+        if (!confirmed) return;
         applyDraftFromBarcode(draft, barcode);
       },
       onManualEntry: () => {
@@ -1227,6 +1335,11 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
         <div>
           <p class="small-text">${options?.prefillName && !editingFood ? 'Create food' : heading}</p>
           <h2>${heading}</h2>
+          ${
+            editingFood
+              ? `<p class="small-text muted">You’re editing this food. Changes won’t affect past entries.</p>`
+              : ''
+          }
         </div>
       </div>
       <div id="add-food-form"></div>
