@@ -1,6 +1,6 @@
-import { FirebaseApp, initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { FirebaseApp, initializeApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -13,25 +13,22 @@ const firebaseConfig = {
 
 let app: FirebaseApp | null = null;
 
-export const getFirebaseApp = () => {
+export const getFirebaseApp = (): FirebaseApp => {
   if (!app) {
     Object.entries(firebaseConfig).forEach(([key, value]) => {
-      if (!value) {
-        console.warn(`Missing Firebase config value for ${key}.`);
-        console.log("Firebase projectId (live):", app.options.projectId);
-        console.log("Firebase authDomain (live):", app.options.authDomain);
-      }
+      if (!value) console.warn(`Missing Firebase config value for ${key}.`);
     });
     app = initializeApp(firebaseConfig);
   }
   return app;
 };
 
-export const auth = getAuth(getFirebaseApp());
-export const db = getFirestore(getFirebaseApp());
-const a = getFirebaseApp();
-console.log("Firebase projectId (live):", a.options.projectId);
-console.log("Firebase authDomain (live):", a.options.authDomain);
+export const firebaseApp = getFirebaseApp();
+export const auth = getAuth(firebaseApp);
+export const db = getFirestore(firebaseApp);
 
-console.log("LIVE projectId:", a.options.projectId);
-console.log("LIVE authDomain:", a.options.authDomain);
+// Optional: only log in dev
+if (import.meta.env.DEV) {
+  console.log("LIVE projectId:", firebaseApp.options.projectId);
+  console.log("LIVE authDomain:", firebaseApp.options.authDomain);
+}
