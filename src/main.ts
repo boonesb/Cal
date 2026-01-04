@@ -61,6 +61,7 @@ type Food = {
   carbsPerServing: number;
   proteinPerServing: number;
   favorite: boolean;
+  barcode?: string;
 };
 
 type FoodDraft = {
@@ -234,6 +235,9 @@ type UsdaFoodResult = {
   calories: number;
   carbs: number;
   protein: number;
+  gtinUpc?: string;
+  servingSize?: number;
+  servingSizeUnit?: string;
 };
 
 const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
@@ -265,6 +269,7 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
       });
       return Number(nutrient?.value ?? nutrient?.amount ?? 0);
     };
+    const servingSizeValue = Number(food.servingSize);
     return {
       id: String(food.fdcId ?? food.description),
       description: String(food.description ?? 'Food'),
@@ -273,16 +278,99 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
       calories: findNutrient('1008'),
       carbs: findNutrient('1005'),
       protein: findNutrient('1003'),
+      gtinUpc: food.gtinUpc ? String(food.gtinUpc) : undefined,
+      servingSize: Number.isFinite(servingSizeValue) ? servingSizeValue : undefined,
+      servingSizeUnit: food.servingSizeUnit ? String(food.servingSizeUnit) : undefined,
     } as UsdaFoodResult;
   });
 };
 
-const normalizeBarcode = (value: string) => value.replace(/\D/g, '');
+const searchUsdaFoodsByBarcode = async (barcode: string): Promise<UsdaFoodResult[]> => {
+  if (!USDA_API_KEY) {
+    throw new Error('Add VITE_USDA_API_KEY to use USDA lookups.');
+  }
+  const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
+  url.searchParams.set('api_key', USDA_API_KEY);
+
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: barcode, pageSize: 8, dataType: ['Branded'] }),
+  });
+  if (!response.ok) {
+    throw new Error('Unable to fetch USDA results right now.');
+  }
+  const data = await response.json();
+  if (!data?.foods?.length) return [];
+
+  return data.foods.map((food: any) => {
+    const nutrients = food.foodNutrients || [];
+    const findNutrient = (id: string) => {
+      const nutrient = nutrients.find((n: any) => {
+        const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
+        return String(nid) === id;
+      });
+      return Number(nutrient?.value ?? nutrient?.amount ?? 0);
+    };
+    const servingSizeValue = Number(food.servingSize);
+    return {
+      id: String(food.fdcId ?? food.description),
+      description: String(food.description ?? 'Food'),
+      dataType: food.dataType ? String(food.dataType) : undefined,
+      brandOwner: food.brandOwner ? String(food.brandOwner) : undefined,
+      calories: findNutrient('1008'),
+      carbs: findNutrient('1005'),
+      protein: findNutrient('1003'),
+      gtinUpc: food.gtinUpc ? String(food.gtinUpc) : undefined,
+      servingSize: Number.isFinite(servingSizeValue) ? servingSizeValue : undefined,
+      servingSizeUnit: food.servingSizeUnit ? String(food.servingSizeUnit) : undefined,
+    } as UsdaFoodResult;
+  });
+};
+
+const normalizeBarcode = (value: string) => value.trim().replace(/\D/g, '');
 
 const isValidBarcode = (barcode: string) => barcode.length >= 8 && barcode.length <= 14;
 
-const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
-  const response = await fetch(`https://world.openfoodfacts.net/api/v2/product/${encodeURIComponent(barcode)}`);
+const parseServingSize = (value: string) => {
+  const match = value.match(/(\d+(?:[.,]\d+)?)\s*(g|ml)\b/i);
+  if (!match) return null;
+  const amount = Number(match[1].replace(',', '.'));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const unit = match[2].toLowerCase() === 'ml' ? 'ml' : 'g';
+  return {
+    amount,
+    unit,
+    label: `${formatNumberSmart(amount)} ${unit}`,
+  };
+};
+
+const resolveOffServing = (product: any) => {
+  if (typeof product?.serving_size === 'string') {
+    const parsed = parseServingSize(product.serving_size);
+    if (parsed) return parsed;
+  }
+  if (product?.serving_quantity && typeof product?.serving_unit === 'string') {
+    const unit = product.serving_unit.toLowerCase();
+    if (unit === 'g' || unit === 'ml') {
+      const amount = Number(product.serving_quantity);
+      if (Number.isFinite(amount) && amount > 0) {
+        return {
+          amount,
+          unit,
+          label: `${formatNumberSmart(amount)} ${unit}`,
+        };
+      }
+    }
+  }
+  return null;
+};
+
+const lookupOpenFoodFacts = async (barcode: string): Promise<FoodDraft | null> => {
+  // Note: browsers block custom User-Agent headers in fetch requests.
+  const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(barcode)}.json`);
   if (!response.ok) {
     throw new Error('Unable to reach Open Food Facts right now.');
   }
@@ -291,6 +379,10 @@ const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
     return null;
   }
   const product = data.product;
+  const serving = resolveOffServing(product);
+  if (!serving) {
+    return null;
+  }
   const nutriments = product.nutriments || {};
   const asNumber = (value: any) => {
     const parsed = Number(value);
@@ -300,25 +392,22 @@ const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
 
   const energyServing = asNumber(nutriments['energy-kcal_serving']) ?? kjToKcal(asNumber(nutriments['energy-kj_serving']));
   const energy100g = asNumber(nutriments['energy-kcal_100g']) ?? kjToKcal(asNumber(nutriments['energy-kj_100g']));
-  const calories = energyServing ?? energy100g;
+  const servingFactor = serving.amount / 100;
+  const calories = energyServing ?? (energy100g != null ? energy100g * servingFactor : null);
 
   const proteinServing = asNumber(nutriments['proteins_serving']);
   const protein100g = asNumber(nutriments['proteins_100g']);
   const carbsServing = asNumber(nutriments['carbohydrates_serving']);
   const carbs100g = asNumber(nutriments['carbohydrates_100g']);
 
-  if (calories == null && proteinServing == null && protein100g == null && carbsServing == null && carbs100g == null) {
+  const protein = proteinServing ?? (protein100g != null ? protein100g * servingFactor : null);
+  const carbs = carbsServing ?? (carbs100g != null ? carbs100g * servingFactor : null);
+
+  if (calories == null || protein == null || carbs == null) {
     return null;
   }
 
-  const usingServing = energyServing != null || proteinServing != null || carbsServing != null;
-  const servingLabel: string | undefined = usingServing
-    ? (typeof product.serving_size === 'string' && product.serving_size.trim()) || undefined
-    : '100 g';
-
-  const safeCalories = calories != null ? Math.max(0, Math.round(calories)) : 0;
-  const protein = proteinServing ?? protein100g ?? 0;
-  const carbs = carbsServing ?? carbs100g ?? 0;
+  const safeCalories = Math.max(0, Math.round(calories));
   const productName =
     product.product_name_en ||
     product.product_name ||
@@ -331,7 +420,7 @@ const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
     caloriesPerServing: safeCalories,
     carbsPerServing: roundTo1(Math.max(0, carbs)),
     proteinPerServing: roundTo1(Math.max(0, protein)),
-    servingLabel,
+    servingLabel: serving.label,
   };
 };
 
@@ -445,8 +534,13 @@ const confirmDialog = (options: {
   });
 };
 
+type BarcodeLookupResult =
+  | { status: 'draft'; draft: FoodDraft }
+  | { status: 'not-found' }
+  | { status: 'cancelled' };
+
 const createBarcodeScanModal = (options: {
-  onLookup: (barcode: string) => Promise<FoodDraft | null>;
+  onLookup: (barcode: string) => Promise<BarcodeLookupResult>;
   onDetected: (draft: FoodDraft, barcode: string) => Promise<void>;
 }) => {
   const overlay = document.createElement('div');
@@ -565,12 +659,16 @@ const createBarcodeScanModal = (options: {
     }
     renderLookupState(normalized);
     try {
-      const draft = await options.onLookup(normalized);
-      if (!draft) {
+      const result = await options.onLookup(normalized);
+      if (result.status === 'not-found') {
         onNotFound();
         return;
       }
-      await options.onDetected(draft, normalized);
+      if (result.status === 'cancelled') {
+        close();
+        return;
+      }
+      await options.onDetected(result.draft, normalized);
       close();
     } catch (err) {
       console.error(err);
@@ -1029,7 +1127,7 @@ const renderDashboard = async (dateOverride?: string) => {
 
 const upsertFood = async (food: Partial<Food> & { name: string }) => {
   if (!state.user) throw new Error('No user');
-  const payload = {
+  const payload: Partial<Food> & { name: string; createdAt: ReturnType<typeof serverTimestamp> } = {
     caloriesPerServing: roundTo2(Number(food.caloriesPerServing ?? 0)),
     carbsPerServing: roundTo2(Number(food.carbsPerServing ?? 0)),
     proteinPerServing: roundTo2(Number(food.proteinPerServing ?? 0)),
@@ -1037,6 +1135,9 @@ const upsertFood = async (food: Partial<Food> & { name: string }) => {
     name: food.name.trim(),
     createdAt: serverTimestamp(),
   };
+  if (food.barcode) {
+    payload.barcode = normalizeBarcode(food.barcode);
+  }
 
   if (food.id) {
     const foodRef = doc(db, 'users', state.user.uid, 'foods', food.id);
@@ -1052,6 +1153,7 @@ const upsertFood = async (food: Partial<Food> & { name: string }) => {
     proteinPerServing: payload.proteinPerServing,
     favorite: payload.favorite,
     name: payload.name,
+    barcode: payload.barcode,
   };
   state.foodCache.push(newFood);
   return newDoc.id;
@@ -1069,6 +1171,8 @@ const renderFoodForm = (options: {
   let proteinVal = food?.proteinPerServing ?? 0;
   let servingLabel: string | undefined;
   let previousDraft: FoodDraft | null = null;
+  let currentBarcode = food?.barcode ? normalizeBarcode(food.barcode) : undefined;
+  let previousBarcode: string | undefined;
   const scanSupported = Boolean(navigator.mediaDevices?.getUserMedia);
   const form = document.createElement('form');
   form.className = 'form-grid form-grid--stack';
@@ -1170,6 +1274,7 @@ const renderFoodForm = (options: {
       carbsPerServing: carbsVal,
       proteinPerServing: proteinVal,
       favorite: formData.get('favorite') === 'true',
+      barcode: currentBarcode,
     } as Food;
     const id = await upsertFood(payload);
     const savedFood = { ...payload, id } as Food;
@@ -1257,6 +1362,7 @@ const renderFoodForm = (options: {
 
   const applyDraftFromLookup = (draft: FoodDraft) => {
     previousDraft = captureCurrentDraft();
+    previousBarcode = currentBarcode;
     restoreDraft(draft);
     setAutofillStatus('Filled from USDA lookup.', Boolean(previousDraft));
     clearLookupResults();
@@ -1265,6 +1371,8 @@ const renderFoodForm = (options: {
 
   const applyDraftFromBarcode = (draft: FoodDraft, barcode?: string) => {
     previousDraft = captureCurrentDraft();
+    previousBarcode = currentBarcode;
+    currentBarcode = barcode;
     caloriesVal = draft.caloriesPerServing;
     carbsVal = draft.carbsPerServing;
     proteinVal = draft.proteinPerServing;
@@ -1279,66 +1387,200 @@ const renderFoodForm = (options: {
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
-    setAutofillStatus('Filled from barcode scan.', Boolean(previousDraft));
+    setAutofillStatus('Based on barcode data — please review before saving.', Boolean(previousDraft));
     clearLookupResults();
   };
 
-  const openUsdaModal = (result: UsdaFoodResult) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal">
-        <div class="modal__header">
-          <h3>Use this USDA result</h3>
-          <button type="button" class="ghost icon-button" id="close-usda-modal">✕</button>
-        </div>
-        <div class="modal__body">
-          <div class="usda-modal__summary">
-            <div class="usda-result__title">${result.description}</div>
-            <div class="usda-result__meta">
-              ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
-              ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
+  const openBarcodeSelectionModal = <T,>(options: {
+    title: string;
+    description?: string;
+    choices: { id: string; title: string; subtitle?: string; detail?: string; value: T }[];
+  }): Promise<T | null> =>
+    new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal">
+          <div class="modal__header">
+            <h3>${options.title}</h3>
+            <button type="button" class="ghost icon-button" data-close>✕</button>
+          </div>
+          <div class="modal__body">
+            ${options.description ? `<p class="small-text muted">${options.description}</p>` : ''}
+            <div class="barcode-choice-list">
+              ${options.choices
+                .map(
+                  (choice) => `
+                <button type="button" class="usda-result" data-choice="${choice.id}">
+                  <div class="usda-result__header">
+                    <div class="usda-result__title">${choice.title}</div>
+                  </div>
+                  ${choice.subtitle ? `<div class="small-text muted">${choice.subtitle}</div>` : ''}
+                  ${choice.detail ? `<div class="small-text">${choice.detail}</div>` : ''}
+                </button>
+              `
+                )
+                .join('')}
             </div>
           </div>
-          <label for="usda-serving-grams">My serving (g)</label>
-          <input id="usda-serving-grams" type="text" inputmode="decimal" value="100" />
-          <p class="small-text muted">We will estimate per-serving nutrition from this grams amount. USDA reference per 100g: ${formatNumberSmart(
-            result.calories
-          )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein.</p>
+          <div class="footer-actions modal__actions">
+            <button type="button" class="secondary" data-cancel>Cancel</button>
+          </div>
         </div>
-        <div class="footer-actions modal__actions">
-          <button type="button" class="secondary" id="cancel-usda">Cancel</button>
-          <button type="button" id="apply-usda">Apply to form</button>
-        </div>
-      </div>
-    `;
-    const removeModal = () => overlay.remove();
-    overlay.addEventListener('click', (event) => {
-      if (event.target === overlay) removeModal();
-    });
-    overlay.querySelector('#cancel-usda')?.addEventListener('click', removeModal);
-    overlay.querySelector('#close-usda-modal')?.addEventListener('click', removeModal);
-    const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
-    const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
-    applyBtn?.addEventListener('click', async () => {
-      const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
-      if (!confirmed) return;
-      const gramsVal = parseDecimal2(gramsInput?.value ?? '0', 1);
-      const factor = gramsVal / 100;
-      const draft: FoodDraft = {
-        name: result.description,
-        caloriesPerServing: roundTo2(result.calories * factor),
-        carbsPerServing: roundTo2(result.carbs * factor),
-        proteinPerServing: roundTo2(result.protein * factor),
-        servingLabel: `${formatNumberSmart(gramsVal)} g`,
+      `;
+      const cleanup = (value: T | null) => {
+        overlay.remove();
+        resolve(value);
       };
-      applyDraftFromLookup(draft);
-      if (lookupInput) lookupInput.value = result.description;
-      setBarcodeStatus('');
-      removeModal();
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) cleanup(null);
+      });
+      overlay.querySelector('[data-close]')?.addEventListener('click', () => cleanup(null));
+      overlay.querySelector('[data-cancel]')?.addEventListener('click', () => cleanup(null));
+      overlay.querySelectorAll<HTMLButtonElement>('[data-choice]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.choice;
+          const match = options.choices.find((choice) => choice.id === id);
+          cleanup(match ? match.value : null);
+        });
+      });
+      document.body.appendChild(overlay);
     });
-    document.body.appendChild(overlay);
-    gramsInput?.focus();
+
+  const openUsdaModal = (
+    result: UsdaFoodResult,
+    options?: { title?: string; referenceLabel?: string }
+  ): Promise<FoodDraft | null> =>
+    new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      const title = options?.title ?? 'Use this USDA result';
+      const referenceLabel = options?.referenceLabel ?? 'USDA reference per 100g';
+      overlay.innerHTML = `
+        <div class="modal">
+          <div class="modal__header">
+            <h3>${title}</h3>
+            <button type="button" class="ghost icon-button" id="close-usda-modal">✕</button>
+          </div>
+          <div class="modal__body">
+            <div class="usda-modal__summary">
+              <div class="usda-result__title">${result.description}</div>
+              <div class="usda-result__meta">
+                ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
+                ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
+              </div>
+            </div>
+            <label for="usda-serving-grams">My serving (g)</label>
+            <input id="usda-serving-grams" type="text" inputmode="decimal" value="100" />
+            <p class="small-text muted">We will estimate per-serving nutrition from this grams amount. ${referenceLabel}: ${formatNumberSmart(
+              result.calories
+            )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein.</p>
+          </div>
+          <div class="footer-actions modal__actions">
+            <button type="button" class="secondary" id="cancel-usda">Cancel</button>
+            <button type="button" id="apply-usda">Apply to form</button>
+          </div>
+        </div>
+      `;
+      const removeModal = () => overlay.remove();
+      const cleanup = (draft: FoodDraft | null) => {
+        removeModal();
+        resolve(draft);
+      };
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) cleanup(null);
+      });
+      overlay.querySelector('#cancel-usda')?.addEventListener('click', () => cleanup(null));
+      overlay.querySelector('#close-usda-modal')?.addEventListener('click', () => cleanup(null));
+      const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
+      const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
+      applyBtn?.addEventListener('click', () => {
+        const gramsVal = parseDecimal2(gramsInput?.value ?? '0', 1);
+        const factor = gramsVal / 100;
+        const draft: FoodDraft = {
+          name: result.description,
+          caloriesPerServing: roundTo2(result.calories * factor),
+          carbsPerServing: roundTo2(result.carbs * factor),
+          proteinPerServing: roundTo2(result.protein * factor),
+          servingLabel: `${formatNumberSmart(gramsVal)} g`,
+        };
+        cleanup(draft);
+      });
+      document.body.appendChild(overlay);
+      gramsInput?.focus();
+    });
+
+  const createDraftFromFood = (saved: Food): FoodDraft => ({
+    name: saved.name,
+    caloriesPerServing: saved.caloriesPerServing,
+    carbsPerServing: saved.carbsPerServing,
+    proteinPerServing: saved.proteinPerServing,
+  });
+
+  const formatUsdaServing = (result: UsdaFoodResult) => {
+    if (!result.servingSize || !result.servingSizeUnit) return undefined;
+    return `${formatNumberSmart(result.servingSize)} ${result.servingSizeUnit}`;
+  };
+
+  const lookupBarcode = async (barcode: string): Promise<BarcodeLookupResult> => {
+    if (!state.entryFormFoodCacheLoaded) {
+      await getUserFoods();
+    }
+    const normalized = normalizeBarcode(barcode);
+    const savedMatches = state.foodCache.filter(
+      (foodItem) => normalizeBarcode(foodItem.barcode ?? '') === normalized
+    );
+    if (savedMatches.length === 1) {
+      return { status: 'draft', draft: createDraftFromFood(savedMatches[0]) };
+    }
+    if (savedMatches.length > 1) {
+      const chosen = await openBarcodeSelectionModal<Food>({
+        title: 'Choose a saved food',
+        description: 'We found multiple saved foods with this barcode.',
+        choices: savedMatches.map((foodItem) => ({
+          id: foodItem.id,
+          title: foodItem.name,
+          subtitle: 'Saved food',
+          value: foodItem,
+        })),
+      });
+      if (!chosen) return { status: 'cancelled' };
+      return { status: 'draft', draft: createDraftFromFood(chosen) };
+    }
+
+    const offDraft = await lookupOpenFoodFacts(normalized);
+    if (offDraft) {
+      return { status: 'draft', draft: offDraft };
+    }
+
+    const usdaResults = await searchUsdaFoodsByBarcode(normalized);
+    if (!usdaResults.length) {
+      return { status: 'not-found' };
+    }
+    const gtinMatches = usdaResults.filter((result) => normalizeBarcode(result.gtinUpc ?? '') === normalized);
+    const candidates = gtinMatches.length ? gtinMatches : usdaResults;
+    let selected: UsdaFoodResult | null = candidates[0];
+    if (candidates.length > 1) {
+      selected = await openBarcodeSelectionModal<UsdaFoodResult>({
+        title: 'Choose a product',
+        description: 'We found multiple barcode matches. Pick the one that fits.',
+        choices: candidates.map((result) => ({
+          id: result.id,
+          title: result.description,
+          subtitle: result.brandOwner,
+          detail: formatUsdaServing(result),
+          value: result,
+        })),
+      });
+    }
+    if (!selected) {
+      return { status: 'cancelled' };
+    }
+    const draft = await openUsdaModal(selected, { title: 'Use this result', referenceLabel: 'Reference per 100g' });
+    if (!draft) {
+      return { status: 'cancelled' };
+    }
+    return { status: 'draft', draft };
   };
 
   const attachDecimalInput = (
@@ -1385,7 +1627,15 @@ const renderFoodForm = (options: {
         <div class="small-text">Per 100g: ${formatNumberSmart(result.calories)} kcal • ${formatNumberSmart(
         result.carbs
       )} g carbs • ${formatNumberSmart(result.protein)} g protein</div>`;
-      btn.addEventListener('click', () => openUsdaModal(result));
+      btn.addEventListener('click', async () => {
+        const draft = await openUsdaModal(result);
+        if (!draft) return;
+        const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
+        if (!confirmed) return;
+        applyDraftFromLookup(draft);
+        if (lookupInput) lookupInput.value = result.description;
+        setBarcodeStatus('');
+      });
       lookupResults.appendChild(btn);
     });
     lookupResults.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1426,14 +1676,16 @@ const renderFoodForm = (options: {
   autofillReset?.addEventListener('click', () => {
     if (!previousDraft) return;
     restoreDraft(previousDraft);
+    currentBarcode = previousBarcode;
     setAutofillStatus('Restored previous values.', false);
     previousDraft = null;
+    previousBarcode = undefined;
     setBarcodeStatus('');
   });
 
   scanBtn?.addEventListener('click', () => {
     createBarcodeScanModal({
-      onLookup: async (barcode) => lookupByBarcode(barcode),
+      onLookup: async (barcode) => lookupBarcode(barcode),
       onDetected: async (draft, barcode) => {
         const confirmed = await confirmOverwriteIfNeeded('barcode scan');
         if (!confirmed) return;
