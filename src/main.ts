@@ -277,6 +277,10 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
   });
 };
 
+const normalizeBarcode = (value: string) => value.replace(/\D/g, '');
+
+const isValidBarcode = (barcode: string) => barcode.length >= 8 && barcode.length <= 14;
+
 const lookupByBarcode = async (barcode: string): Promise<FoodDraft | null> => {
   const response = await fetch(`https://world.openfoodfacts.net/api/v2/product/${encodeURIComponent(barcode)}`);
   if (!response.ok) {
@@ -441,7 +445,10 @@ const confirmDialog = (options: {
   });
 };
 
-const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Promise<void>; onManualEntry: () => void }) => {
+const createBarcodeScanModal = (options: {
+  onLookup: (barcode: string) => Promise<FoodDraft | null>;
+  onDetected: (draft: FoodDraft, barcode: string) => Promise<void>;
+}) => {
   const overlay = document.createElement('div');
   overlay.className = 'scan-overlay';
   const modal = document.createElement('div');
@@ -452,6 +459,7 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
   let controls: IScannerControls | undefined;
   let timeoutId: number | null = null;
   let hasDetection = false;
+  let escapeHandler: ((event: KeyboardEvent) => void) | null = null;
   const reader = new BrowserMultiFormatReader();
 
   const stopTracks = () => {
@@ -469,19 +477,23 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
 
   const close = () => {
     stopTracks();
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+      escapeHandler = null;
+    }
     overlay.remove();
   };
 
   const renderContent = (html: string) => {
     modal.innerHTML = html;
     modal.querySelector('#close-scan')?.addEventListener('click', close);
-    modal.querySelector('#enter-manually')?.addEventListener('click', () => {
-      close();
-      options.onManualEntry();
-    });
   };
 
   const renderLookupState = (barcode: string) => {
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+      escapeHandler = null;
+    }
     renderContent(`
       <div class="scan-modal__header">
         <button class="ghost" id="close-scan">Cancel</button>
@@ -494,7 +506,16 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
     `);
   };
 
-  const renderErrorState = (message: string, allowRetry: boolean) => {
+  const renderErrorState = (
+    message: string,
+    allowRetry: boolean,
+    allowManualEntry: boolean,
+    retryAction: () => void = startScanning
+  ) => {
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+      escapeHandler = null;
+    }
     renderContent(`
       <div class="scan-modal__header">
         <button class="ghost" id="close-scan">Cancel</button>
@@ -503,18 +524,135 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
         <p class="scan-status">${message}</p>
         <div class="footer-actions">
           ${allowRetry ? '<button class="secondary" id="retry-scan">Try again</button>' : ''}
-          <button id="enter-manually">Enter manually</button>
+          ${allowManualEntry ? '<button id="enter-barcode">Enter barcode number</button>' : ''}
         </div>
       </div>
     `);
     modal.querySelector('#retry-scan')?.addEventListener('click', () => {
+      retryAction();
+    });
+    modal.querySelector('#enter-barcode')?.addEventListener('click', () => {
+      openManualEntry();
+    });
+  };
+
+  const renderNotFoundState = (tryAgainLabel: string, onTryAgain: () => void) => {
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+      escapeHandler = null;
+    }
+    renderContent(`
+      <div class="scan-modal__header">
+        <button class="ghost" id="close-scan">Cancel</button>
+      </div>
+      <div class="scan-modal__body">
+        <p class="scan-status">We couldn’t find this product by barcode.</p>
+        <div class="footer-actions">
+          <button class="secondary" id="retry-scan">${tryAgainLabel}</button>
+          <button id="close-scan-body">Close</button>
+        </div>
+      </div>
+    `);
+    modal.querySelector('#retry-scan')?.addEventListener('click', onTryAgain);
+    modal.querySelector('#close-scan-body')?.addEventListener('click', close);
+  };
+
+  const handleLookup = async (barcode: string, onNotFound: () => void, onError: () => void) => {
+    const normalized = normalizeBarcode(barcode);
+    if (!isValidBarcode(normalized)) {
+      renderErrorState('Enter a valid 8–14 digit barcode.', true, true);
+      return;
+    }
+    renderLookupState(normalized);
+    try {
+      const draft = await options.onLookup(normalized);
+      if (!draft) {
+        onNotFound();
+        return;
+      }
+      await options.onDetected(draft, normalized);
+      close();
+    } catch (err) {
+      console.error(err);
+      onError();
+    }
+  };
+
+  const openManualEntry = () => {
+    stopTracks();
+    renderContent(`
+      <div class="scan-modal__header">
+        <button class="ghost" id="close-scan">Cancel</button>
+      </div>
+      <div class="scan-modal__body">
+        <form id="manual-barcode-form" class="scan-modal__form">
+          <div class="field-group">
+            <label for="manual-barcode">Barcode (UPC/EAN)</label>
+            <input
+              id="manual-barcode"
+              name="manualBarcode"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="Enter 8–14 digits"
+            />
+            <p class="small-text muted">Digits only. We’ll ignore spaces or dashes.</p>
+          </div>
+          <p class="error-text is-hidden" id="manual-barcode-error"></p>
+          <div class="footer-actions">
+            <button type="button" class="secondary" id="back-to-camera">Back to camera</button>
+            <button type="submit">Look up</button>
+          </div>
+        </form>
+      </div>
+    `);
+    const input = modal.querySelector<HTMLInputElement>('#manual-barcode');
+    const errorEl = modal.querySelector<HTMLParagraphElement>('#manual-barcode-error');
+    const backBtn = modal.querySelector<HTMLButtonElement>('#back-to-camera');
+    const form = modal.querySelector<HTMLFormElement>('#manual-barcode-form');
+    if (escapeHandler) document.removeEventListener('keydown', escapeHandler);
+    escapeHandler = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        startScanning();
+      }
+    };
+    document.addEventListener('keydown', escapeHandler);
+    input?.addEventListener('input', () => {
+      if (!input) return;
+      input.value = normalizeBarcode(input.value);
+      if (errorEl) errorEl.classList.add('is-hidden');
+    });
+    backBtn?.addEventListener('click', () => {
       startScanning();
     });
+    form?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const rawValue = input?.value ?? '';
+      const normalized = normalizeBarcode(rawValue);
+      if (!isValidBarcode(normalized)) {
+        if (errorEl) {
+          errorEl.textContent = 'Enter 8–14 digits to look up a barcode.';
+          errorEl.classList.remove('is-hidden');
+        }
+        input?.focus();
+        return;
+      }
+      await handleLookup(
+        normalized,
+        () => renderNotFoundState('Try again', openManualEntry),
+        () => renderErrorState('Lookup failed. Check your connection and try again.', true, true, openManualEntry)
+      );
+    });
+    input?.focus();
   };
 
   const startScanning = async () => {
     stopTracks();
     hasDetection = false;
+    if (escapeHandler) {
+      document.removeEventListener('keydown', escapeHandler);
+      escapeHandler = null;
+    }
     renderContent(`
       <div class="scan-modal__header">
         <button class="ghost" id="close-scan">Cancel</button>
@@ -525,15 +663,18 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
         </div>
         <p class="small-text muted center">Center the barcode in the frame.</p>
         <div class="footer-actions">
-          <button class="secondary" id="enter-manually">Enter manually</button>
+          <button class="secondary" id="enter-barcode">Enter barcode number</button>
         </div>
       </div>
     `);
+    modal.querySelector('#enter-barcode')?.addEventListener('click', () => {
+      openManualEntry();
+    });
     const videoEl = modal.querySelector<HTMLVideoElement>('#scan-video');
     if (!videoEl) return;
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
-        renderErrorState('Camera access is not supported in this browser.', false);
+        renderErrorState('Camera access is not supported in this browser.', false, true);
         return;
       }
       currentStream = await navigator.mediaDevices.getUserMedia({
@@ -546,17 +687,14 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
           hasDetection = true;
           const text = result.getText();
           stopTracks();
-          renderLookupState(text);
-          options
-            .onDetected(text)
-            .then(() => {
-              close();
-            })
-            .catch((err) => {
-              console.error(err);
+          handleLookup(
+            text,
+            () => renderNotFoundState('Try scanning again', startScanning),
+            () => {
               hasDetection = false;
-              renderErrorState('Lookup failed. Check your connection and try again.', true);
-            });
+              renderErrorState('Lookup failed. Check your connection and try again.', true, true);
+            }
+          );
         }
         if (error && error.name === 'NotFoundException') {
           // ignore continuous loop until a barcode is found
@@ -565,11 +703,11 @@ const createBarcodeScanModal = (options: { onDetected: (barcode: string) => Prom
       });
       timeoutId = window.setTimeout(() => {
         stopTracks();
-        renderErrorState('No barcode detected. Try again or enter manually.', true);
+        renderErrorState('No barcode detected. Try again or enter a barcode number.', true, true);
       }, 25000);
     } catch (err: any) {
       console.error(err);
-      renderErrorState('Camera access blocked. Allow camera to scan or enter manually.', false);
+      renderErrorState('Camera access blocked. Allow camera to scan or enter a barcode number.', false, true);
     }
   };
 
@@ -1295,22 +1433,11 @@ const renderFoodForm = (options: {
 
   scanBtn?.addEventListener('click', () => {
     createBarcodeScanModal({
-      onDetected: async (barcode) => {
-        const draft = await lookupByBarcode(barcode);
-        if (!draft) {
-          setBarcodeStatus(`No product found for ${barcode}. Enter details manually.`);
-          updateServingContext();
-          nameInput?.focus();
-          return;
-        }
+      onLookup: async (barcode) => lookupByBarcode(barcode),
+      onDetected: async (draft, barcode) => {
         const confirmed = await confirmOverwriteIfNeeded('barcode scan');
         if (!confirmed) return;
         applyDraftFromBarcode(draft, barcode);
-      },
-      onManualEntry: () => {
-        setBarcodeStatus('Enter details manually.');
-        updateServingContext();
-        nameInput?.focus();
       },
     });
   });

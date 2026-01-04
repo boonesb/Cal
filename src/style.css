@@ -915,6 +915,22 @@ input[aria-invalid='true'] {
   border-color: #334155;
 }
 
+.scan-modal input,
+.scan-modal select,
+.scan-modal textarea {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-color: #334155;
+}
+
+.scan-modal input::placeholder {
+  color: #94a3b8;
+}
+
+.scan-modal .error-text {
+  color: #fca5a5;
+}
+
 .scan-video {
   background: #0f172a;
   border: 1px solid #1e293b;
