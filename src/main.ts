@@ -6,6 +6,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   orderBy,
   query,
   serverTimestamp,
@@ -88,6 +89,14 @@ type Entry = {
   createdAt?: string;
 };
 
+type WaterLog = {
+  id: string;
+  userId: string;
+  date: string;
+  amountMl: number;
+  createdAt?: string;
+};
+
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
@@ -105,6 +114,7 @@ const state: {
   pendingEntryFoodName?: string;
   returnToEntryAfterFoodSave: boolean;
   isMobile: boolean;
+  lastWaterMl?: number;
 } = {
   user: null,
   selectedDate: todayStr(),
@@ -117,6 +127,7 @@ const state: {
   pendingEntryFoodName: undefined,
   returnToEntryAfterFoodSave: false,
   isMobile: window.matchMedia('(max-width: 640px)').matches,
+  lastWaterMl: undefined,
 };
 
 const resetInactivityTimer = () => {
@@ -174,6 +185,12 @@ const parseDecimal2 = (raw: string, min: number) => {
 
 const roundTo2 = (num: number) => Math.round(num * 100) / 100;
 const roundTo1 = (num: number) => Math.round(num * 10) / 10;
+
+const OUNCE_TO_ML = 29.5735;
+const WATER_PRESETS_OZ = [8, 12, 16, 20, 24, 32];
+
+const ozToMl = (oz: number) => Math.round(oz * OUNCE_TO_ML);
+const mlToOz = (ml: number) => Math.round(ml / OUNCE_TO_ML);
 
 const renderMacroChips = (options: {
   calories: number;
@@ -549,6 +566,52 @@ const fetchEntriesForDate = async (date: string): Promise<Entry[]> => {
   }));
 };
 
+const fetchWaterLogsForDate = async (date: string): Promise<WaterLog[]> => {
+  if (!state.user) return [];
+  const waterCol = collection(db, 'users', state.user.uid, 'waterLogs', date, 'items');
+  const logsSnapshot = await getDocs(query(waterCol, orderBy('createdAt')));
+  return logsSnapshot.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...(docSnap.data() as Omit<WaterLog, 'id'>),
+  }));
+};
+
+const fetchUserWaterPreference = async () => {
+  if (!state.user) return undefined;
+  const userRef = doc(db, 'users', state.user.uid);
+  const userSnap = await getDoc(userRef);
+  if (!userSnap.exists()) return undefined;
+  const data = userSnap.data() as { lastWaterMl?: number };
+  if (!Number.isFinite(data.lastWaterMl)) return undefined;
+  return Number(data.lastWaterMl);
+};
+
+const setUserWaterPreference = async (amountMl: number) => {
+  if (!state.user) return;
+  const userRef = doc(db, 'users', state.user.uid);
+  await setDoc(userRef, { lastWaterMl: amountMl }, { merge: true });
+};
+
+const addWaterLogForDate = async (date: string, amountMl: number) => {
+  if (!state.user) return;
+  const payload = {
+    userId: state.user.uid,
+    date,
+    amountMl,
+    createdAt: serverTimestamp(),
+  };
+  await addDoc(collection(db, 'users', state.user.uid, 'waterLogs', date, 'items'), payload);
+};
+
+const removeLatestWaterLogForDate = async (date: string) => {
+  if (!state.user) return;
+  const waterCol = collection(db, 'users', state.user.uid, 'waterLogs', date, 'items');
+  const logsSnapshot = await getDocs(query(waterCol, orderBy('createdAt', 'desc'), limit(1)));
+  const latest = logsSnapshot.docs[0];
+  if (!latest) return;
+  await deleteDoc(doc(db, 'users', state.user.uid, 'waterLogs', date, 'items', latest.id));
+};
+
 const sumEntries = (entries: Entry[]) => {
   return entries.reduce(
     (acc, entry) => {
@@ -564,6 +627,8 @@ const sumEntries = (entries: Entry[]) => {
     { calories: 0, carbs: 0, protein: 0 }
   );
 };
+
+const sumWaterLogs = (logs: WaterLog[]) => logs.reduce((acc, log) => acc + log.amountMl, 0);
 
 const setAppContent = (html: string) => {
   appEl.innerHTML = html;
@@ -617,6 +682,42 @@ const confirmDialog = (options: {
     overlay.querySelector('[data-close]')?.addEventListener('click', () => cleanup(false));
     overlay.querySelector('[data-cancel]')?.addEventListener('click', () => cleanup(false));
     overlay.querySelector('[data-confirm]')?.addEventListener('click', () => cleanup(true));
+    document.body.appendChild(overlay);
+  });
+};
+
+const waterAmountChooser = (amounts: number[]) => {
+  return new Promise<number | null>((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal modal--water">
+        <div class="modal__header">
+          <h3>Quick add water</h3>
+          <button type="button" class="ghost icon-button" data-close>✕</button>
+        </div>
+        <div class="modal__body">
+          <div class="water-amount-grid">
+            ${amounts.map((amount) => `<button type="button" class="secondary" data-amount="${amount}">${amount} oz</button>`).join('')}
+          </div>
+        </div>
+        <div class="footer-actions modal__actions">
+          <button type="button" class="secondary" data-cancel>Cancel</button>
+        </div>
+      </div>
+    `;
+    const cleanup = (result: number | null) => {
+      overlay.remove();
+      resolve(result);
+    };
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) cleanup(null);
+    });
+    overlay.querySelector('[data-close]')?.addEventListener('click', () => cleanup(null));
+    overlay.querySelector('[data-cancel]')?.addEventListener('click', () => cleanup(null));
+    overlay.querySelectorAll<HTMLButtonElement>('[data-amount]').forEach((btn) => {
+      btn.addEventListener('click', () => cleanup(Number(btn.dataset.amount)));
+    });
     document.body.appendChild(overlay);
   });
 };
@@ -1062,8 +1163,11 @@ document.addEventListener('click', (event) => {
   setNavMenuOpen(false);
 });
 
-const renderTotals = (entries: Entry[]) => {
+const renderTotals = (entries: Entry[], waterLogs: WaterLog[], date: string) => {
   const totals = sumEntries(entries);
+  const totalWaterMl = sumWaterLogs(waterLogs);
+  const totalWaterOz = mlToOz(totalWaterMl);
+  const canUndoWater = waterLogs.length > 0 && date === todayStr();
   return `
     <div class="totals">
       <div class="total-card total-card--hero">
@@ -1074,6 +1178,17 @@ const renderTotals = (entries: Entry[]) => {
           label: 'Daily totals',
           variant: 'hero',
         })}
+      </div>
+      <div class="total-card water-card" id="water-card">
+        <div class="water-card__header">
+          <h3>Water</h3>
+          <button id="undo-water" class="ghost" ${canUndoWater ? '' : 'disabled'}>Undo</button>
+        </div>
+        <div class="water-card__total" id="water-total">${totalWaterOz} oz today</div>
+        <div class="water-card__actions">
+          <button id="add-water">+ Add water</button>
+          <button id="water-chooser" class="secondary icon-button" aria-label="Choose water amount">▾</button>
+        </div>
       </div>
     </div>
   `;
@@ -1153,20 +1268,61 @@ const renderDashboard = async (dateOverride?: string) => {
   if (!entriesList || !totalsEl) return;
   entriesList.innerHTML = '<p class="small-text">Loading entries...</p>';
 
-  const entries = await fetchEntriesForDate(state.selectedDate);
-  totalsEl.innerHTML = renderTotals(entries);
+  const [entries, waterLogs, lastWaterMl] = await Promise.all([
+    fetchEntriesForDate(state.selectedDate),
+    fetchWaterLogsForDate(state.selectedDate),
+    fetchUserWaterPreference(),
+  ]);
+  state.lastWaterMl = lastWaterMl ?? state.lastWaterMl;
+  totalsEl.innerHTML = renderTotals(entries, waterLogs, state.selectedDate);
+
+  const refreshWaterCard = async () => {
+    const latestLogs = await fetchWaterLogsForDate(state.selectedDate);
+    const totalWaterMl = sumWaterLogs(latestLogs);
+    const totalWaterOz = mlToOz(totalWaterMl);
+    const totalEl = totalsEl.querySelector<HTMLDivElement>('#water-total');
+    if (totalEl) {
+      totalEl.textContent = `${totalWaterOz} oz today`;
+    }
+    const undoButton = totalsEl.querySelector<HTMLButtonElement>('#undo-water');
+    if (undoButton) {
+      undoButton.disabled = latestLogs.length === 0 || state.selectedDate !== todayStr();
+    }
+  };
+
+  const addWater = async (amountMl: number) => {
+    await addWaterLogForDate(state.selectedDate, amountMl);
+    await setUserWaterPreference(amountMl);
+    state.lastWaterMl = amountMl;
+    await refreshWaterCard();
+  };
+
+  totalsEl.querySelector<HTMLButtonElement>('#add-water')?.addEventListener('click', async () => {
+    const defaultMl = state.lastWaterMl ?? ozToMl(8);
+    await addWater(defaultMl);
+  });
+
+  totalsEl.querySelector<HTMLButtonElement>('#water-chooser')?.addEventListener('click', async () => {
+    const amount = await waterAmountChooser(WATER_PRESETS_OZ);
+    if (!amount) return;
+    await addWater(ozToMl(amount));
+  });
+
+  totalsEl.querySelector<HTMLButtonElement>('#undo-water')?.addEventListener('click', async () => {
+    if (state.selectedDate !== todayStr()) return;
+    await removeLatestWaterLogForDate(state.selectedDate);
+    await refreshWaterCard();
+  });
 
   if (!entries.length) {
     entriesList.innerHTML = '<p class="small-text">No entries yet for this date.</p>';
-    return;
-  }
-
-  const rows = entries
-    .map((entry) => {
-      const calories = entry.servings * entry.caloriesPerServing;
-      const carbs = entry.servings * entry.carbsPerServing;
-      const protein = entry.servings * entry.proteinPerServing;
-      return `
+  } else {
+    const rows = entries
+      .map((entry) => {
+        const calories = entry.servings * entry.caloriesPerServing;
+        const carbs = entry.servings * entry.carbsPerServing;
+        const protein = entry.servings * entry.proteinPerServing;
+        return `
         <li class="entry-card">
           <div class="entry-main">
             <div>
@@ -1181,35 +1337,36 @@ const renderDashboard = async (dateOverride?: string) => {
           </div>
         </li>
       `;
-    })
-    .join('');
+      })
+      .join('');
 
-  entriesList.innerHTML = `<ul class="entry-list">${rows}</ul>`;
+    entriesList.innerHTML = `<ul class="entry-list">${rows}</ul>`;
 
-  entriesList.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) =>
-    btn.addEventListener('click', () => {
-      const entryId = btn.dataset.edit;
-      if (!entryId) return;
-      setView('add-entry', { date: state.selectedDate, entryId });
-    })
-  );
+    entriesList.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const entryId = btn.dataset.edit;
+        if (!entryId) return;
+        setView('add-entry', { date: state.selectedDate, entryId });
+      })
+    );
 
-  entriesList.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      const entryId = btn.dataset.delete;
-      if (!entryId || !state.user) return;
-      const confirmed = await confirmDialog({
-        title: 'Delete entry?',
-        message: 'This entry will be removed from your daily log.',
-        confirmLabel: 'Delete entry',
-        tone: 'danger',
-      });
-      if (!confirmed) return;
-      const entryRef = doc(db, 'users', state.user.uid, 'entries', state.selectedDate, 'items', entryId);
-      await deleteDoc(entryRef);
-      setView('dashboard');
-    })
-  );
+    entriesList.querySelectorAll<HTMLButtonElement>('button[data-delete]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const entryId = btn.dataset.delete;
+        if (!entryId || !state.user) return;
+        const confirmed = await confirmDialog({
+          title: 'Delete entry?',
+          message: 'This entry will be removed from your daily log.',
+          confirmLabel: 'Delete entry',
+          tone: 'danger',
+        });
+        if (!confirmed) return;
+        const entryRef = doc(db, 'users', state.user.uid, 'entries', state.selectedDate, 'items', entryId);
+        await deleteDoc(entryRef);
+        setView('dashboard');
+      })
+    );
+  }
 };
 
 const upsertFood = async (food: Partial<Food> & { name: string }) => {
@@ -2421,6 +2578,7 @@ const renderShellAndRoute = () => {
 
 onAuthStateChanged(auth, (user) => {
   state.user = user;
+  state.lastWaterMl = undefined;
   if (!user) {
     state.inactivityTimer && window.clearTimeout(state.inactivityTimer);
     state.inactivityTimer = null;
