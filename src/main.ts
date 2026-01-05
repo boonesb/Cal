@@ -412,6 +412,16 @@ const resolveServingAnchor = (options: {
 const getNutritionBasisLabel = (anchor: ServingAnchor | null) =>
   anchor ? `Per serving (${anchor.label})` : 'Per 100 g';
 
+const getManualNutritionBasisLabel = (grams?: number) => {
+  if (Number.isFinite(grams) && (grams ?? 0) > 0) {
+    return `Per serving (${formatNumberSmart(grams ?? 0)} g)`;
+  }
+  return 'Per serving (grams)';
+};
+
+const getManualReferenceLabel = (anchor: ServingAnchor | null) =>
+  anchor ? `Per serving (${anchor.label})` : 'Reference values';
+
 const getFoodBasis = (food: Pick<Food, 'servingSize' | 'servingSizeUnit' | 'servingSizeGrams'>) => {
   const anchor = resolveServingAnchor({
     servingSizeGrams: food.servingSizeGrams,
@@ -1261,7 +1271,10 @@ const renderFoodForm = (options: {
   let servingLabel: string | undefined;
   let servingSize = food?.servingSize;
   let servingSizeUnit = food?.servingSizeUnit;
-  let servingSizeGrams = food?.servingSizeGrams;
+  let servingSizeGrams = food?.servingSizeGrams ?? (food?.servingSizeUnit === 'g' ? food?.servingSize : undefined);
+  if (!servingSizeGrams && food) {
+    servingSizeGrams = 100;
+  }
   let previousDraft: FoodDraft | null = null;
   let currentBarcode = food?.barcode ? normalizeBarcode(food.barcode) : undefined;
   let previousBarcode: string | undefined;
@@ -1322,21 +1335,33 @@ const renderFoodForm = (options: {
           <label for="food-name">Name</label>
           <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
         </div>
+        <div class="field-group">
+          <label for="serving-grams">Serving size (g)</label>
+          <input
+            id="serving-grams"
+            name="servingSizeGrams"
+            type="text"
+            inputmode="decimal"
+            required
+            placeholder="e.g., 45"
+            value="${servingSizeGrams ? formatNumberSmart(servingSizeGrams) : ''}"
+          />
+        </div>
         <div class="macro-grid">
           <div>
-            <label for="calories">Calories</label>
+            <label for="calories">Calories per serving</label>
             <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               caloriesVal
             )}" />
           </div>
           <div>
-            <label for="carbs">Carbs (g)</label>
+            <label for="carbs">Carbs (g) per serving</label>
             <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               carbsVal
             )}" />
           </div>
           <div>
-            <label for="protein">Protein (g)</label>
+            <label for="protein">Protein (g) per serving</label>
             <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               proteinVal
             )}" />
@@ -1359,6 +1384,10 @@ const renderFoodForm = (options: {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const formData = new FormData(form);
+    const gramsValue = parseDecimal2(String(formData.get('servingSizeGrams') || ''), 0.01);
+    servingSizeGrams = gramsValue;
+    servingSize = gramsValue;
+    servingSizeUnit = 'g';
     const payload = {
       id: food?.id,
       name: String(formData.get('name') || '').trim(),
@@ -1378,12 +1407,10 @@ const renderFoodForm = (options: {
 
   const nameInput = form.querySelector<HTMLInputElement>('#food-name');
   const lookupInput = form.querySelector<HTMLInputElement>('#lookup-term');
+  const servingGramsInput = form.querySelector<HTMLInputElement>('#serving-grams');
   const caloriesInput = form.querySelector<HTMLInputElement>('#calories');
   const carbsInput = form.querySelector<HTMLInputElement>('#carbs');
   const proteinInput = form.querySelector<HTMLInputElement>('#protein');
-  const caloriesLabel = form.querySelector<HTMLLabelElement>('label[for="calories"]');
-  const carbsLabel = form.querySelector<HTMLLabelElement>('label[for="carbs"]');
-  const proteinLabel = form.querySelector<HTMLLabelElement>('label[for="protein"]');
   const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
   const scanBtn = form.querySelector<HTMLButtonElement>('#scan-barcode');
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
@@ -1407,12 +1434,8 @@ const renderFoodForm = (options: {
     });
     servingLabel = anchor?.label;
     if (servingContextEl) {
-      servingContextEl.textContent = getNutritionBasisLabel(anchor);
+      servingContextEl.textContent = getManualNutritionBasisLabel(servingSizeGrams);
     }
-    const basisSuffix = getNutritionBasisLabel(anchor).replace(/^Per\\s+/i, 'per ');
-    if (caloriesLabel) caloriesLabel.textContent = `Calories ${basisSuffix}`;
-    if (carbsLabel) carbsLabel.textContent = `Carbs (g) ${basisSuffix}`;
-    if (proteinLabel) proteinLabel.textContent = `Protein (g) ${basisSuffix}`;
   };
 
   updateServingContext({ servingLabel, servingSize, servingSizeUnit, servingSizeGrams });
@@ -1458,6 +1481,10 @@ const renderFoodForm = (options: {
     if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
     if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
     if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
+    if (servingGramsInput) {
+      const gramsValue = draft.servingSizeGrams ?? servingSizeGrams;
+      servingGramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
+    }
     updateServingContext({
       servingLabel: draft.servingLabel,
       servingSize: draft.servingSize,
@@ -1585,7 +1612,7 @@ const renderFoodForm = (options: {
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       const title = options?.title ?? 'Use this result';
-      const referenceLabel = options?.referenceLabel ?? 'Reference per 100 g';
+      const referenceLabel = options?.referenceLabel ?? 'Reference values';
       overlay.innerHTML = `
         <div class="modal">
           <div class="modal__header">
@@ -1720,7 +1747,7 @@ const renderFoodForm = (options: {
     if (!selected) {
       return { status: 'cancelled' };
     }
-    const draft = await openUsdaModal(selected, { title: 'Use this result', referenceLabel: 'Reference per 100 g' });
+    const draft = await openUsdaModal(selected, { title: 'Use this result', referenceLabel: 'Reference values' });
     if (!draft) {
       return { status: 'cancelled' };
     }
@@ -1753,6 +1780,12 @@ const renderFoodForm = (options: {
   attachDecimalInput(proteinInput, 0, (value) => {
     proteinVal = value;
   });
+  attachDecimalInput(servingGramsInput, 0.01, (value) => {
+    servingSizeGrams = value;
+    servingSize = value;
+    servingSizeUnit = 'g';
+    updateServingContext({ servingSizeGrams: value });
+  });
 
   const renderLookupResults = (results: UsdaFoodResult[]) => {
     if (!lookupResults) return;
@@ -1776,7 +1809,7 @@ const renderFoodForm = (options: {
           ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
         </div>
         ${result.brandOwner ? `<div class="small-text muted">${result.brandOwner}</div>` : ''}
-        <div class="small-text">${getNutritionBasisLabel(anchor)}: ${formatNumberSmart(
+        <div class="small-text">${getManualReferenceLabel(anchor)}: ${formatNumberSmart(
         calories
       )} kcal • ${formatNumberSmart(carbs)} g carbs • ${formatNumberSmart(protein)} g protein</div>`;
       btn.addEventListener('click', async () => {
