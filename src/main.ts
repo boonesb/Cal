@@ -183,6 +183,19 @@ const parseDecimal2 = (raw: string, min: number) => {
   return Math.max(min, rounded);
 };
 
+const parseDecimalNullable = (raw: string, min: number) => {
+  const sanitized = raw.replace(/[^0-9.]/g, '');
+  if (!sanitized.trim()) return null;
+  const parts = sanitized.split('.');
+  const whole = parts[0] || '0';
+  const decimals = parts.length > 1 ? parts.slice(1).join('') : '';
+  const normalized = decimals ? `${whole}.${decimals.slice(0, 2)}` : whole;
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) return null;
+  const rounded = Math.round(parsed * 100) / 100;
+  return Math.max(min, rounded);
+};
+
 const roundTo2 = (num: number) => Math.round(num * 100) / 100;
 const roundTo1 = (num: number) => Math.round(num * 10) / 10;
 
@@ -446,6 +459,34 @@ const getFoodBasis = (food: Pick<Food, 'servingSize' | 'servingSizeUnit' | 'serv
     servingSizeUnit: food.servingSizeUnit,
   });
   return { anchor, label: getNutritionBasisLabel(anchor) };
+};
+
+const isGenericFood = (food?: Food) => Boolean(food && !food.barcode);
+
+const getServingSizeGramsValue = (
+  food?: Pick<Food, 'servingSizeGrams' | 'servingSize' | 'servingSizeUnit'>
+) => {
+  if (!food) return null;
+  if (Number.isFinite(food.servingSizeGrams) && (food.servingSizeGrams ?? 0) > 0) {
+    return Number(food.servingSizeGrams);
+  }
+  if (
+    food.servingSizeUnit?.toLowerCase() === 'g' &&
+    Number.isFinite(food.servingSize) &&
+    (food.servingSize ?? 0) > 0
+  ) {
+    return Number(food.servingSize);
+  }
+  return null;
+};
+
+const getEntryMacroBasisLabel = (food?: Food) => {
+  if (!food) return 'Per 100 g';
+  if (isGenericFood(food)) {
+    const grams = getServingSizeGramsValue(food) ?? 100;
+    return `Per serving (${formatNumberSmart(grams)} g)`;
+  }
+  return getFoodBasis(food).label;
 };
 
 const resolveOffServing = (product: any) => {
@@ -2242,6 +2283,9 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   let selectedFood: Food | undefined;
   let servings = 1;
+  let grams: number | null = null;
+  let servingSizeGrams: number | null = null;
+  let useGramsInput = false;
   let perServing = { calories: 0, carbs: 0, protein: 0 };
   let typedName = '';
   let macroBasisLabel = 'Per 100 g';
@@ -2256,7 +2300,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         carbs: prefill.carbsPerServing,
         protein: prefill.proteinPerServing,
       };
-      macroBasisLabel = getFoodBasis(prefill).label;
+      macroBasisLabel = getEntryMacroBasisLabel(prefill);
+      servingSizeGrams = getServingSizeGramsValue(prefill);
+      useGramsInput = isGenericFood(prefill) && Boolean(servingSizeGrams);
+      grams = null;
     }
     state.prefillFoodId = undefined;
   }
@@ -2274,7 +2321,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         protein: data.proteinPerServing,
       };
       selectedFood = foods.find((f) => f.name === data.foodName) || undefined;
-      macroBasisLabel = selectedFood ? getFoodBasis(selectedFood).label : macroBasisLabel;
+      macroBasisLabel = selectedFood ? getEntryMacroBasisLabel(selectedFood) : macroBasisLabel;
+      servingSizeGrams = getServingSizeGramsValue(selectedFood);
+      useGramsInput = isGenericFood(selectedFood) && Boolean(servingSizeGrams);
+      if (useGramsInput && servingSizeGrams) {
+        grams = roundTo2(servings * servingSizeGrams);
+      }
     }
   }
 
@@ -2315,7 +2367,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       const btn = document.createElement('button');
       btn.type = 'button';
       const isSelected = selectedFood?.id === food.id;
-      const basis = getFoodBasis(food);
+      const basisLabel = getEntryMacroBasisLabel(food);
       btn.className = `food-option-button ${isSelected ? 'is-selected' : ''}`;
       btn.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
       btn.innerHTML = `
@@ -2327,7 +2379,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
             protein: food.proteinPerServing,
             variant: 'inline',
             className: 'food-option__summary',
-            label: basis.label,
+            label: basisLabel,
           })}
         </div>
       `;
@@ -2338,7 +2390,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
           carbs: food.carbsPerServing,
           protein: food.proteinPerServing,
         };
-        updateMacroBasisLabels(basis.label);
+        servingSizeGrams = getServingSizeGramsValue(food);
+        useGramsInput = isGenericFood(food) && Boolean(servingSizeGrams);
+        grams = useGramsInput ? null : grams;
+        updateMacroBasisLabels(getEntryMacroBasisLabel(food));
         const input = entryForm.querySelector<HTMLInputElement>('#food');
         if (input) input.value = food.name;
         const caloriesInput = entryForm.querySelector<HTMLInputElement>('#calories');
@@ -2348,12 +2403,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         if (carbsInput) carbsInput.value = formatNumberSmart(food.carbsPerServing);
         if (proteinInput) proteinInput.value = formatNumberSmart(food.proteinPerServing);
         renderFoodSuggestions(food.name);
-        updateTotals();
+        updateEntryInputMode(food);
         if (!macroEditorWasToggled) {
           setMacroEditorOpen(false);
         }
-        const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
-        servingsInput?.focus();
+        const targetInput = entryForm.querySelector<HTMLInputElement>(useGramsInput ? '#grams' : '#servings');
+        targetInput?.focus();
       });
       list?.appendChild(btn);
     });
@@ -2382,10 +2437,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     <div class="form-section">
       <div class="section-heading">
         <p class="section-eyebrow">Step 2</p>
-        <h3>Servings</h3>
+        <h3 id="entry-amount-heading">Servings</h3>
       </div>
       <div class="responsive-row">
-        <div>
+        <div id="servings-field">
           <label for="servings">Servings</label>
           <input
             id="servings"
@@ -2397,6 +2452,11 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
             required
           />
           <p class="small-text muted">Enter amount eaten (minimum 0.01).</p>
+        </div>
+        <div id="grams-field" class="is-hidden">
+          <label for="grams">Amount (g)</label>
+          <input id="grams" name="grams" type="text" inputmode="decimal" placeholder="e.g., 162" />
+          <p class="small-text muted">Enter grams eaten.</p>
         </div>
         <div class="totals-panel">
           <div id="entry-totals"></div>
@@ -2452,10 +2512,35 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     if (proteinLabel) proteinLabel.textContent = `Protein (g) ${basisSuffix}`;
   };
 
+  const updateEntryInputMode = (food?: Food) => {
+    servingSizeGrams = getServingSizeGramsValue(food);
+    useGramsInput = Boolean(food && isGenericFood(food) && servingSizeGrams);
+    const headingEl = entryForm.querySelector<HTMLHeadingElement>('#entry-amount-heading');
+    const servingsField = entryForm.querySelector<HTMLDivElement>('#servings-field');
+    const gramsField = entryForm.querySelector<HTMLDivElement>('#grams-field');
+    if (headingEl) headingEl.textContent = useGramsInput ? 'Amount' : 'Servings';
+    servingsField?.classList.toggle('is-hidden', useGramsInput);
+    gramsField?.classList.toggle('is-hidden', !useGramsInput);
+    if (useGramsInput) {
+      const gramsInput = entryForm.querySelector<HTMLInputElement>('#grams');
+      const gramsValue = grams ?? null;
+      if (gramsInput) gramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
+      if (servingSizeGrams) {
+        servings = gramsValue ? gramsValue / servingSizeGrams : 0;
+      } else {
+        servings = 0;
+      }
+    } else {
+      const servingsInput = entryForm.querySelector<HTMLInputElement>('#servings');
+      if (servingsInput) servingsInput.value = formatNumberSmart(servings);
+    }
+    updateTotals();
+  };
+
   updateMacroBasisLabels(macroBasisLabel);
 
   renderFoodSuggestions(typedName);
-  updateTotals();
+  updateEntryInputMode(selectedFood);
 
   const macroEditor = entryForm.querySelector<HTMLDivElement>('#macro-editor');
   const toggleMacrosBtn = entryForm.querySelector<HTMLButtonElement>('#toggle-macros');
@@ -2497,8 +2582,36 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     });
   };
 
+  const attachNullableDecimalInput = (
+    selector: string,
+    min: number,
+    onChange: (value: number | null) => void
+  ) => {
+    const input = entryForm.querySelector<HTMLInputElement>(selector);
+    if (!input) return;
+    const applyValue = (raw: string, finalize: boolean) => {
+      const parsed = parseDecimalNullable(raw, min);
+      onChange(parsed);
+      if (finalize) {
+        input.value = parsed == null ? '' : formatNumberSmart(parsed);
+      }
+      updateTotals();
+    };
+    input.addEventListener('input', () => applyValue(input.value, false));
+    input.addEventListener('blur', () => applyValue(input.value, true));
+  };
+
   attachDecimalInput('#servings', 0.01, (value) => {
     servings = value;
+  });
+
+  attachNullableDecimalInput('#grams', 0.01, (value) => {
+    grams = value;
+    if (useGramsInput && servingSizeGrams) {
+      servings = value ? value / servingSizeGrams : 0;
+    } else {
+      servings = 0;
+    }
   });
 
   attachDecimalInput('#calories', 0, (value) => {
@@ -2513,14 +2626,17 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   if (state.prefillFoodId) {
     setTimeout(() => {
-      entryForm.querySelector<HTMLInputElement>('#servings')?.focus();
+      const targetInput = entryForm.querySelector<HTMLInputElement>(useGramsInput ? '#grams' : '#servings');
+      targetInput?.focus();
     }, 50);
   }
 
   entryForm.querySelector<HTMLInputElement>('#food')?.addEventListener('input', (e) => {
     typedName = (e.target as HTMLInputElement).value;
     selectedFood = undefined;
+    grams = null;
     updateMacroBasisLabels('Per 100 g');
+    updateEntryInputMode(undefined);
     renderFoodSuggestions(typedName);
     if (!macroEditorWasToggled) {
       setMacroEditorOpen(true);
@@ -2539,6 +2655,17 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     if (!foodName) {
       alert('Food name is required.');
       return;
+    }
+    if (useGramsInput) {
+      if (!servingSizeGrams) {
+        alert('Serving size grams are missing for this food.');
+        return;
+      }
+      if (!grams || grams <= 0) {
+        alert('Enter the grams eaten.');
+        return;
+      }
+      servings = grams / servingSizeGrams;
     }
     const payload = {
       foodName,
