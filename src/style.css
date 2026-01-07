@@ -737,7 +737,9 @@ label {
 }
 
 .usda-result {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.35rem;
   width: 100%;
   text-align: left;
@@ -746,7 +748,6 @@ label {
   padding: 0.7rem 0.85rem;
   border-radius: 10px;
   min-width: 0;
-  align-items: start;
   overflow: visible;
 }
 
@@ -765,20 +766,20 @@ label {
 
 .usda-result__title-row {
   display: flex;
-  align-items: flex-start;
+  align-items: baseline;
   gap: 0.5rem;
   min-width: 0;
+  width: 100%;
 }
 
 .usda-result__title {
   font-weight: 700;
   min-width: 0;
   line-height: 1.35;
-  white-space: normal;
+  white-space: nowrap;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
 }
 
 .usda-result__badge {
