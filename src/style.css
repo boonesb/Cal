@@ -73,6 +73,15 @@ h3 {
   gap: 0.75rem;
 }
 
+.dashboard-card {
+  padding: 0.9rem;
+  margin-bottom: 0.85rem;
+}
+
+.dashboard-card.stack-card {
+  gap: 0.6rem;
+}
+
 .button,
 button,
 input[type='submit'] {
@@ -340,12 +349,12 @@ label {
 .totals {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 
 .total-card {
   background: #ecfeff;
-  padding: 1rem;
+  padding: 0.85rem;
   border-radius: 16px;
   border: 1px solid #99f6e4;
   width: 100%;
@@ -375,6 +384,48 @@ label {
 
 .hero-metrics--single {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.daily-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.daily-metric {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.daily-metric__label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.daily-metric__value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.daily-metric__unit {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.daily-metric__actions {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.button-compact {
+  padding: 0.35rem 0.6rem;
+  min-height: 36px;
 }
 
 .hero-metric {
@@ -609,8 +660,8 @@ label {
 .date-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
 }
 
 .date-display {
@@ -629,9 +680,34 @@ label {
   font-weight: 600;
 }
 
-.date-caret {
-  color: var(--color-muted);
-  font-size: 0.85rem;
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: #fff;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.25);
+  z-index: 20;
+  max-width: calc(100% - 2rem);
+}
+
+.toast__message {
+  font-size: 0.95rem;
+}
+
+.toast__action {
+  background: transparent;
+  color: #93c5fd;
+  border: none;
+  font-weight: 700;
+  padding: 0.35rem 0.5rem;
+  min-height: auto;
 }
 
 .food-suggestions {

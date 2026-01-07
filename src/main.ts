@@ -1243,6 +1243,45 @@ const renderNav = () => {
   return header;
 };
 
+const ensureToastContainer = () => {
+  if (document.querySelector('#toast-container')) return;
+  const container = document.createElement('div');
+  container.id = 'toast-container';
+  container.setAttribute('aria-live', 'polite');
+  appEl.appendChild(container);
+};
+
+const showToast = (options: {
+  message: string;
+  actionLabel?: string;
+  onAction?: () => void | Promise<void>;
+  durationMs?: number;
+}) => {
+  const { message, actionLabel, onAction, durationMs = 3500 } = options;
+  ensureToastContainer();
+  const container = document.querySelector<HTMLDivElement>('#toast-container');
+  if (!container) return;
+  container.innerHTML = '';
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerHTML = `
+    <div class="toast__message">${message}</div>
+    ${actionLabel ? `<button class="toast__action" type="button">${actionLabel}</button>` : ''}
+  `;
+  container.appendChild(toast);
+  let timer = window.setTimeout(() => {
+    toast.remove();
+  }, durationMs);
+  if (actionLabel && onAction) {
+    const actionButton = toast.querySelector<HTMLButtonElement>('.toast__action');
+    actionButton?.addEventListener('click', async () => {
+      window.clearTimeout(timer);
+      await onAction();
+      toast.remove();
+    });
+  }
+};
+
 const buildShell = () => {
   setAppContent('');
   appEl.appendChild(renderNav());
@@ -1250,6 +1289,7 @@ const buildShell = () => {
   const main = document.createElement('div');
   main.id = 'view-container';
   appEl.appendChild(main);
+  ensureToastContainer();
   appEl.appendChild(renderFooter());
   return main;
 };
@@ -1323,33 +1363,39 @@ const renderTotals = (entries: Entry[], waterLogs: WaterLog[], date: string) => 
   const totals = sumEntries(entries);
   const totalWaterMl = sumWaterLogs(waterLogs);
   const totalWaterOz = mlToOz(totalWaterMl);
-  const canUndoWater = waterLogs.length > 0 && date === todayStr();
   return `
     <div class="totals">
-      <div class="total-card total-card--hero">
+      <div class="total-card">
         <div class="total-card__header">
           <div class="total-card__label">Daily totals</div>
         </div>
-        ${renderHeroMetrics({
-          calories: totals.calories,
-          carbs: totals.carbs,
-          protein: totals.protein,
-        })}
-      </div>
-      <div class="total-card water-card" id="water-card">
-        <div class="water-card__header">
-          <span class="hero-metric-label">Water</span>
-          <button id="undo-water" class="ghost" ${canUndoWater ? '' : 'disabled'}>Undo</button>
-        </div>
-        <div class="hero-metrics hero-metrics--single">
-          <div class="hero-metric">
-            <div class="hero-metric-value" id="water-total">${totalWaterOz}</div>
-            <div class="hero-metric-unit">oz today</div>
+        <div class="daily-metrics">
+          <div class="daily-metric">
+            <div class="daily-metric__label">Calories</div>
+            <div class="daily-metric__value">${formatNumberSmart(totals.calories)}</div>
+            <div class="daily-metric__unit">kcal</div>
           </div>
-        </div>
-        <div class="water-card__actions">
-          <button id="add-water">+ Add water</button>
-          <button id="water-chooser" class="secondary icon-button" aria-label="Choose water amount">▾</button>
+          <div class="daily-metric">
+            <div class="daily-metric__label">Carbs</div>
+            <div class="daily-metric__value">${formatNumberSmart(totals.carbs)}</div>
+            <div class="daily-metric__unit">g</div>
+          </div>
+          <div class="daily-metric">
+            <div class="daily-metric__label">Protein</div>
+            <div class="daily-metric__value">${formatNumberSmart(totals.protein)}</div>
+            <div class="daily-metric__unit">g</div>
+          </div>
+          <div class="daily-metric daily-metric--water">
+            <div class="daily-metric__label">Water</div>
+            <div class="daily-metric__value" id="water-total">${totalWaterOz}</div>
+            <div class="daily-metric__unit">oz</div>
+            <div class="daily-metric__actions">
+              <button id="add-water" class="ghost button-compact">+ Add water</button>
+              <button id="water-chooser" class="ghost icon-button button-compact" aria-label="Choose water amount">
+                ▾
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1363,27 +1409,21 @@ const renderDashboard = async (dateOverride?: string) => {
   }
   const container = buildShell();
   container.innerHTML = `
-    <section class="card stack-card">
+    <section class="card stack-card dashboard-card">
       <div class="dashboard-header">
-        <div>
-          <p class="small-text">Daily dashboard</p>
-          <h2 id="selected-date">${formatDisplayDate(state.selectedDate)}</h2>
-        </div>
+        <h2>Daily dashboard</h2>
         <div class="date-row">
+          <button id="prev-day" class="ghost icon-button" aria-label="Previous day">‹</button>
           <button id="date-display" class="date-display" type="button" aria-label="Select date">
             <span class="date-value">${formatDisplayDate(state.selectedDate)}</span>
-            <span class="date-caret">▼</span>
           </button>
-          <div class="date-controls">
-            <button id="prev-day" class="ghost icon-button" aria-label="Previous day">‹</button>
-            <button id="next-day" class="ghost icon-button" aria-label="Next day">›</button>
-          </div>
+          <button id="next-day" class="ghost icon-button" aria-label="Next day">›</button>
           <input type="date" id="date-picker" class="visually-hidden" value="${state.selectedDate}" />
         </div>
       </div>
       <div id="totals"></div>
     </section>
-    <section class="card stack-card">
+    <section class="card stack-card dashboard-card">
       <div class="flex space-between">
         <h3>Entries</h3>
         <button id="add-entry">Add entry</button>
@@ -1446,10 +1486,6 @@ const renderDashboard = async (dateOverride?: string) => {
     if (totalEl) {
       totalEl.textContent = `${totalWaterOz}`;
     }
-    const undoButton = totalsEl.querySelector<HTMLButtonElement>('#undo-water');
-    if (undoButton) {
-      undoButton.disabled = latestLogs.length === 0 || state.selectedDate !== todayStr();
-    }
   };
 
   const addWater = async (amountMl: number) => {
@@ -1457,6 +1493,18 @@ const renderDashboard = async (dateOverride?: string) => {
     await setUserWaterPreference(amountMl);
     state.lastWaterMl = amountMl;
     await refreshWaterCard();
+    const amountOz = mlToOz(amountMl);
+    const dateForUndo = state.selectedDate;
+    showToast({
+      message: `Added ${formatNumberSmart(amountOz)} oz`,
+      actionLabel: 'Undo',
+      onAction: async () => {
+        await removeLatestWaterLogForDate(dateForUndo);
+        if (state.selectedDate === dateForUndo) {
+          await refreshWaterCard();
+        }
+      },
+    });
   };
 
   totalsEl.querySelector<HTMLButtonElement>('#add-water')?.addEventListener('click', async () => {
@@ -1468,12 +1516,6 @@ const renderDashboard = async (dateOverride?: string) => {
     const amount = await waterAmountChooser(WATER_PRESETS_OZ);
     if (!amount) return;
     await addWater(ozToMl(amount));
-  });
-
-  totalsEl.querySelector<HTMLButtonElement>('#undo-water')?.addEventListener('click', async () => {
-    if (state.selectedDate !== todayStr()) return;
-    await removeLatestWaterLogForDate(state.selectedDate);
-    await refreshWaterCard();
   });
 
   if (!entries.length) {
