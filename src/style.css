@@ -594,6 +594,19 @@ label {
   border-radius: 10px;
 }
 
+.lookup-results .usda-result {
+  color: #0f172a;
+}
+
+.lookup-results .usda-result__title {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.lookup-results .usda-result .small-text {
+  color: #334155;
+}
+
 .usda-result__header {
   display: flex;
   justify-content: space-between;
@@ -856,6 +869,29 @@ input[aria-invalid='true'] {
   padding: 0.25rem;
   display: grid;
   gap: 0.35rem;
+}
+
+.form-grid.review-mode .find-section .section-heading,
+.form-grid.review-mode .find-actions {
+  display: none;
+}
+
+.usda-modal__section {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 0.85rem;
+}
+
+.usda-modal__values {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.92rem;
+}
+
+.usda-modal__values > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .autofill-meta {

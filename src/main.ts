@@ -98,6 +98,7 @@ type WaterLog = {
 };
 
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
+const BUILD_TIMESTAMP = import.meta.env.BUILD_TIMESTAMP ?? BUILD_TIME_ISO;
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
 
@@ -198,6 +199,30 @@ const parseDecimalNullable = (raw: string, min: number) => {
 
 const roundTo2 = (num: number) => Math.round(num * 100) / 100;
 const roundTo1 = (num: number) => Math.round(num * 10) / 10;
+const PER_100G_UNIT = 'per100g';
+
+const attachSelectAllOnFocus = (input: HTMLInputElement | null) => {
+  if (!input) return;
+  const scheduleSelect = () => {
+    requestAnimationFrame(() => {
+      if (document.activeElement !== input) return;
+      input.select();
+      setTimeout(() => {
+        if (document.activeElement === input) input.select();
+      }, 0);
+    });
+  };
+  const handlePointerUp = (event: Event) => {
+    if (input.selectionStart === input.selectionEnd) {
+      event.preventDefault();
+      scheduleSelect();
+    }
+  };
+  input.addEventListener('focus', scheduleSelect);
+  input.addEventListener('mouseup', handlePointerUp);
+  input.addEventListener('pointerup', handlePointerUp);
+  input.addEventListener('touchend', handlePointerUp);
+};
 
 const OUNCE_TO_ML = 29.5735;
 const WATER_PRESETS_OZ = [8, 12, 16, 20, 24, 32];
@@ -264,14 +289,27 @@ const renderMacroSummary = (options: {
   `;
 };
 
+const formatUsdaValue = (value: number | null, unit: string) => {
+  if (value == null) return 'Not available';
+  return `${formatNumberSmart(value)} ${unit}`;
+};
+
+const getUsdaServingGrams = (result: UsdaFoodResult) => {
+  const servingSize = result.servingSize;
+  const normalizedUnit = normalizeServingUnit(result.servingSizeUnit);
+  if (!Number.isFinite(servingSize) || servingSize == null) return null;
+  if (normalizedUnit !== 'g') return null;
+  return Number(servingSize);
+};
+
 type UsdaFoodResult = {
   id: string;
   description: string;
   dataType?: string;
   brandOwner?: string;
-  calories: number;
-  carbs: number;
-  protein: number;
+  calories: number | null;
+  carbs: number | null;
+  protein: number | null;
   gtinUpc?: string;
   servingSize?: number;
   servingSizeUnit?: string;
@@ -304,7 +342,11 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
         const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
         return String(nid) === id;
       });
-      return Number(nutrient?.value ?? nutrient?.amount ?? 0);
+      if (!nutrient) return null;
+      const rawValue = nutrient?.value ?? nutrient?.amount;
+      if (rawValue == null) return null;
+      const parsed = Number(rawValue);
+      return Number.isFinite(parsed) ? parsed : null;
     };
     const servingSizeValue = Number(food.servingSize);
     return {
@@ -349,7 +391,11 @@ const searchUsdaFoodsByBarcode = async (barcode: string): Promise<UsdaFoodResult
         const nid = n.nutrientId ?? n.nutrientNumber ?? n.nutrient?.id;
         return String(nid) === id;
       });
-      return Number(nutrient?.value ?? nutrient?.amount ?? 0);
+      if (!nutrient) return null;
+      const rawValue = nutrient?.value ?? nutrient?.amount;
+      if (rawValue == null) return null;
+      const parsed = Number(rawValue);
+      return Number.isFinite(parsed) ? parsed : null;
     };
     const servingSizeValue = Number(food.servingSize);
     return {
@@ -390,9 +436,12 @@ type ServingAnchor = {
   label: string;
 };
 
+const isPer100gUnit = (unit?: string) => unit?.trim().toLowerCase() === PER_100G_UNIT;
+
 const normalizeServingUnit = (unit?: string) => {
   if (!unit) return null;
   const normalized = unit.trim().toLowerCase();
+  if (normalized === PER_100G_UNIT) return null;
   if (normalized === 'g' || normalized === 'gram' || normalized === 'grams') return 'g';
   if (
     normalized === 'ml' ||
@@ -422,6 +471,9 @@ const resolveServingAnchor = (options: {
   servingSizeUnit?: string;
   servingLabel?: string;
 }) => {
+  if (isPer100gUnit(options.servingSizeUnit)) {
+    return null;
+  }
   if (Number.isFinite(options.servingSizeGrams) && (options.servingSizeGrams ?? 0) > 0) {
     const amount = options.servingSizeGrams ?? 0;
     return {
@@ -450,7 +502,7 @@ const getManualNutritionBasisLabel = (grams?: number) => {
 };
 
 const getManualReferenceLabel = (anchor: ServingAnchor | null) =>
-  anchor ? `Per serving (${anchor.label})` : 'Reference values';
+  anchor ? `Per serving (${anchor.label})` : 'Based on USDA standard: 100 g';
 
 const getFoodBasis = (food: Pick<Food, 'servingSize' | 'servingSizeUnit' | 'servingSizeGrams'>) => {
   const anchor = resolveServingAnchor({
@@ -461,12 +513,22 @@ const getFoodBasis = (food: Pick<Food, 'servingSize' | 'servingSizeUnit' | 'serv
   return { anchor, label: getNutritionBasisLabel(anchor) };
 };
 
-const isGenericFood = (food?: Food) => Boolean(food && !food.barcode);
+const hasTrueServing = (food?: Pick<Food, 'servingSizeGrams' | 'servingSize' | 'servingSizeUnit'>) => {
+  if (!food) return false;
+  if (isPer100gUnit(food.servingSizeUnit)) return false;
+  const anchor = resolveServingAnchor({
+    servingSizeGrams: food.servingSizeGrams,
+    servingSize: food.servingSize,
+    servingSizeUnit: food.servingSizeUnit,
+  });
+  return Boolean(anchor);
+};
 
 const getServingSizeGramsValue = (
   food?: Pick<Food, 'servingSizeGrams' | 'servingSize' | 'servingSizeUnit'>
 ) => {
   if (!food) return null;
+  if (isPer100gUnit(food.servingSizeUnit)) return 100;
   if (Number.isFinite(food.servingSizeGrams) && (food.servingSizeGrams ?? 0) > 0) {
     return Number(food.servingSizeGrams);
   }
@@ -482,9 +544,8 @@ const getServingSizeGramsValue = (
 
 const getEntryMacroBasisLabel = (food?: Food) => {
   if (!food) return 'Per 100 g';
-  if (isGenericFood(food)) {
-    const grams = getServingSizeGramsValue(food) ?? 100;
-    return `Per serving (${formatNumberSmart(grams)} g)`;
+  if (!hasTrueServing(food)) {
+    return 'Per 100 g';
   }
   return getFoodBasis(food).label;
 };
@@ -678,7 +739,7 @@ const setAppContent = (html: string) => {
 const renderFooter = () => {
   const footer = document.createElement('footer');
   footer.className = 'app-footer';
-  footer.textContent = `v ${APP_VERSION} · ${BUILD_TIME_ISO}`;
+  footer.textContent = `v ${APP_VERSION} · ${BUILD_TIMESTAMP}`;
   return footer;
 };
 
@@ -1470,13 +1531,14 @@ const renderFoodForm = (options: {
   let servingSize = food?.servingSize;
   let servingSizeUnit = food?.servingSizeUnit;
   let servingSizeGrams = food?.servingSizeGrams ?? (food?.servingSizeUnit === 'g' ? food?.servingSize : undefined);
-  if (!servingSizeGrams && food) {
+  if (!servingSizeGrams && food && !isPer100gUnit(food.servingSizeUnit)) {
     servingSizeGrams = 100;
   }
   let previousDraft: FoodDraft | null = null;
   let hasScanValuesApplied = false;
   let scanSummary:
     | {
+        title: string;
         sourceLabel: string;
         basisLabel: string;
         calories: number;
@@ -1528,7 +1590,7 @@ const renderFoodForm = (options: {
         <div id="scan-summary" class="scan-summary is-hidden" role="status">
           <div class="scan-summary__header">
             <div>
-              <p class="scan-summary__eyebrow">Scanned nutrition data</p>
+              <p class="scan-summary__eyebrow" id="scan-summary-title">Scanned nutrition data</p>
               <p class="small-text muted" id="scan-summary-source"></p>
             </div>
             <button type="button" class="ghost small-button" id="discard-scan">Discard scanned values</button>
@@ -1552,7 +1614,7 @@ const renderFoodForm = (options: {
           <input id="food-name" name="name" required value="${food?.name ?? prefillName ?? ''}" />
         </div>
         <div class="field-group">
-          <label for="serving-grams">Serving size (g)</label>
+          <label for="serving-grams" id="serving-grams-label">Serving size (g)</label>
           <input
             id="serving-grams"
             name="servingSizeGrams"
@@ -1562,22 +1624,23 @@ const renderFoodForm = (options: {
             placeholder="e.g., 45"
             value="${servingSizeGrams ? formatNumberSmart(servingSizeGrams) : ''}"
           />
+          <p class="small-text muted" id="serving-grams-help"></p>
         </div>
         <div class="macro-grid">
           <div>
-            <label for="calories">Calories per serving</label>
+            <label for="calories" id="calories-label">Calories per serving</label>
             <input id="calories" name="caloriesPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               caloriesVal
             )}" />
           </div>
           <div>
-            <label for="carbs">Carbs (g) per serving</label>
+            <label for="carbs" id="carbs-label">Carbs (g) per serving</label>
             <input id="carbs" name="carbsPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               carbsVal
             )}" />
           </div>
           <div>
-            <label for="protein">Protein (g) per serving</label>
+            <label for="protein" id="protein-label">Protein (g) per serving</label>
             <input id="protein" name="proteinPerServing" type="text" inputmode="decimal" required value="${formatNumberSmart(
               proteinVal
             )}" />
@@ -1601,9 +1664,15 @@ const renderFoodForm = (options: {
     e.preventDefault();
     const formData = new FormData(form);
     const gramsValue = parseDecimal2(String(formData.get('servingSizeGrams') || ''), 0.01);
-    servingSizeGrams = gramsValue;
-    servingSize = gramsValue;
-    servingSizeUnit = 'g';
+    if (isPer100gUnit(servingSizeUnit)) {
+      servingSizeGrams = 100;
+      servingSize = 100;
+      servingSizeUnit = PER_100G_UNIT;
+    } else {
+      servingSizeGrams = gramsValue;
+      servingSize = gramsValue;
+      servingSizeUnit = 'g';
+    }
     const payload = {
       id: food?.id,
       name: String(formData.get('name') || '').trim(),
@@ -1627,12 +1696,18 @@ const renderFoodForm = (options: {
   const caloriesInput = form.querySelector<HTMLInputElement>('#calories');
   const carbsInput = form.querySelector<HTMLInputElement>('#carbs');
   const proteinInput = form.querySelector<HTMLInputElement>('#protein');
+  const servingGramsLabel = form.querySelector<HTMLLabelElement>('#serving-grams-label');
+  const servingGramsHelp = form.querySelector<HTMLParagraphElement>('#serving-grams-help');
+  const caloriesLabelEl = form.querySelector<HTMLLabelElement>('#calories-label');
+  const carbsLabelEl = form.querySelector<HTMLLabelElement>('#carbs-label');
+  const proteinLabelEl = form.querySelector<HTMLLabelElement>('#protein-label');
   const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
   const scanBtn = form.querySelector<HTMLButtonElement>('#scan-barcode');
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
   const scanSummaryEl = form.querySelector<HTMLDivElement>('#scan-summary');
+  const scanSummaryTitle = form.querySelector<HTMLParagraphElement>('#scan-summary-title');
   const scanSummarySource = form.querySelector<HTMLParagraphElement>('#scan-summary-source');
   const scanSummaryBasis = form.querySelector<HTMLDivElement>('#scan-summary-basis');
   const scanSummaryMacros = form.querySelector<HTMLDivElement>('#scan-summary-macros');
@@ -1652,7 +1727,25 @@ const renderFoodForm = (options: {
     servingLabel = anchor?.label;
   };
 
+  const updateFoodFormBasisLabels = () => {
+    const isPer100g = isPer100gUnit(servingSizeUnit);
+    if (servingGramsLabel) {
+      servingGramsLabel.textContent = isPer100g ? 'Nutrition basis (g)' : 'Serving size (g)';
+    }
+    if (servingGramsHelp) {
+      servingGramsHelp.textContent = isPer100g ? 'Nutrition is stored per 100 g (no serving size).' : '';
+    }
+    const perLabel = isPer100g ? 'per 100 g' : 'per serving';
+    if (caloriesLabelEl) caloriesLabelEl.textContent = `Calories ${perLabel}`;
+    if (carbsLabelEl) carbsLabelEl.textContent = `Carbs (g) ${perLabel}`;
+    if (proteinLabelEl) proteinLabelEl.textContent = `Protein (g) ${perLabel}`;
+    if (servingGramsInput) {
+      servingGramsInput.readOnly = isPer100g;
+    }
+  };
+
   updateServingContext({ servingLabel, servingSize, servingSizeUnit, servingSizeGrams });
+  updateFoodFormBasisLabels();
 
   const setLookupCollapsed = (collapsed: boolean) => {
     lookupResults?.classList.toggle('lookup-results--collapsed', collapsed);
@@ -1672,14 +1765,17 @@ const renderFoodForm = (options: {
   const setScanSummary = (summary: typeof scanSummary) => {
     scanSummary = summary;
     hasScanValuesApplied = Boolean(summary);
-    if (!scanSummaryEl || !scanSummarySource || !scanSummaryBasis || !scanSummaryMacros) return;
+    form.classList.toggle('review-mode', Boolean(summary));
+    if (!scanSummaryEl || !scanSummarySource || !scanSummaryBasis || !scanSummaryMacros || !scanSummaryTitle) return;
     if (!summary) {
       scanSummaryEl.classList.add('is-hidden');
+      scanSummaryTitle.textContent = 'Scanned nutrition data';
       scanSummarySource.textContent = '';
       scanSummaryBasis.textContent = '';
       scanSummaryMacros.innerHTML = '';
       return;
     }
+    scanSummaryTitle.textContent = summary.title;
     scanSummarySource.textContent = summary.sourceLabel;
     scanSummaryBasis.textContent = summary.basisLabel;
     scanSummaryMacros.innerHTML = renderMacroSummary({
@@ -1691,16 +1787,23 @@ const renderFoodForm = (options: {
     scanSummaryEl.classList.remove('is-hidden');
   };
 
-  const buildScanSummary = (draft: FoodDraft, sourceLabel: string) => {
+  const buildScanSummary = (draft: FoodDraft, sourceLabel: string, title: string) => {
     const anchor = resolveServingAnchor({
       servingSizeGrams: draft.servingSizeGrams,
       servingSize: draft.servingSize,
       servingSizeUnit: draft.servingSizeUnit,
       servingLabel: draft.servingLabel,
     });
+    const isPer100g = isPer100gUnit(draft.servingSizeUnit);
+    const basisLabel = isPer100g
+      ? 'Based on USDA standard: 100 g'
+      : anchor
+        ? `Based on ${anchor.label}`
+        : 'Based on serving size';
     return {
+      title,
       sourceLabel,
-      basisLabel: anchor ? `Per serving (${anchor.label})` : 'Per serving',
+      basisLabel,
       calories: draft.caloriesPerServing,
       carbs: draft.carbsPerServing,
       protein: draft.proteinPerServing,
@@ -1736,6 +1839,7 @@ const renderFoodForm = (options: {
       servingSizeUnit: draft.servingSizeUnit,
       servingSizeGrams: draft.servingSizeGrams,
     });
+    updateFoodFormBasisLabels();
   };
 
   const confirmOverwriteIfNeeded = async (sourceLabel: string) => {
@@ -1758,7 +1862,7 @@ const renderFoodForm = (options: {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
     restoreDraft(draft);
-    setScanSummary(buildScanSummary(draft, 'From nutrition lookup.'));
+    setScanSummary(buildScanSummary(draft, 'From nutrition lookup.', 'Lookup data'));
     clearLookupResults();
     nameInput?.focus();
   };
@@ -1783,13 +1887,18 @@ const renderFoodForm = (options: {
       servingSizeUnit: draft.servingSizeUnit,
       servingSizeGrams: draft.servingSizeGrams,
     });
+    updateFoodFormBasisLabels();
+    if (servingGramsInput) {
+      const gramsValue = draft.servingSizeGrams ?? servingSizeGrams;
+      servingGramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
+    }
     caloriesInput?.focus();
     setBarcodeStatus(
       barcode
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
-    setScanSummary(buildScanSummary(draft, 'From barcode scan.'));
+    setScanSummary(buildScanSummary(draft, 'From barcode scan.', 'Scanned nutrition data'));
     clearLookupResults();
   };
 
@@ -1849,15 +1958,18 @@ const renderFoodForm = (options: {
       document.body.appendChild(overlay);
     });
 
-  const openUsdaModal = (
-    result: UsdaFoodResult,
-    options?: { title?: string; referenceLabel?: string }
-  ): Promise<FoodDraft | null> =>
+  const openUsdaModal = (result: UsdaFoodResult, options?: { title?: string }): Promise<FoodDraft | null> =>
     new Promise((resolve) => {
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
-      const title = options?.title ?? 'Use this result';
-      const referenceLabel = options?.referenceLabel ?? 'Reference values';
+      const title = options?.title ?? 'Review USDA nutrition';
+      const usdaServingGrams = getUsdaServingGrams(result);
+      const sourceBasisGrams = usdaServingGrams ?? 100;
+      const defaultGrams = usdaServingGrams ?? 100;
+      const basisLine = usdaServingGrams
+        ? `Based on USDA serving: ${formatNumberSmart(usdaServingGrams)} g`
+        : 'Based on USDA standard: 100 g';
+      const gramsLabel = usdaServingGrams ? 'My serving (g)' : 'Grams eaten';
       overlay.innerHTML = `
         <div class="modal">
           <div class="modal__header">
@@ -1865,18 +1977,38 @@ const renderFoodForm = (options: {
             <button type="button" class="ghost icon-button" id="close-usda-modal">✕</button>
           </div>
           <div class="modal__body">
-            <div class="usda-modal__summary">
-              <div class="usda-result__title">${result.description}</div>
-              <div class="usda-result__meta">
-                ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
-                ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
+            <div class="usda-modal__section">
+              <p class="section-eyebrow">USDA values (as provided)</p>
+              <div class="usda-modal__summary">
+                <div class="usda-result__title">${result.description}</div>
+                <div class="usda-result__meta">
+                  ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
+                  ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
+                </div>
+              </div>
+              <p class="small-text muted">${basisLine}</p>
+              <div class="usda-modal__values">
+                <div><span>Calories</span><span>${formatUsdaValue(result.calories, 'kcal')}</span></div>
+                <div><span>Carbs</span><span>${formatUsdaValue(result.carbs, 'g')}</span></div>
+                <div><span>Protein</span><span>${formatUsdaValue(result.protein, 'g')}</span></div>
               </div>
             </div>
-            <label for="usda-serving-grams">My serving (g)</label>
-            <input id="usda-serving-grams" type="text" inputmode="decimal" value="100" />
-            <p class="small-text muted">We will estimate per-serving nutrition from this grams amount. ${referenceLabel}: ${formatNumberSmart(
-              result.calories
-            )} kcal • ${formatNumberSmart(result.carbs)} g carbs • ${formatNumberSmart(result.protein)} g protein.</p>
+            <div class="usda-modal__section">
+              <label for="usda-serving-grams">${gramsLabel}</label>
+              <input id="usda-serving-grams" type="text" inputmode="decimal" value="${formatNumberSmart(
+                defaultGrams
+              )}" />
+              <p class="small-text muted">USDA values are based on ${basisLine.replace('Based on ', '').replace(/\.$/, '')}.</p>
+              <p class="small-text muted">The numbers below show what will be applied to your food for the grams you enter.</p>
+            </div>
+            <div class="usda-modal__section">
+              <p class="section-eyebrow">Applied to form</p>
+              <div class="usda-modal__values">
+                <div><span>Calories</span><span id="usda-applied-calories"></span></div>
+                <div><span>Carbs</span><span id="usda-applied-carbs"></span></div>
+                <div><span>Protein</span><span id="usda-applied-protein"></span></div>
+              </div>
+            </div>
           </div>
           <div class="footer-actions modal__actions">
             <button type="button" class="secondary" id="cancel-usda">Cancel</button>
@@ -1896,23 +2028,62 @@ const renderFoodForm = (options: {
       overlay.querySelector('#close-usda-modal')?.addEventListener('click', () => cleanup(null));
       const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
       const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
+      const appliedCalories = overlay.querySelector<HTMLSpanElement>('#usda-applied-calories');
+      const appliedCarbs = overlay.querySelector<HTMLSpanElement>('#usda-applied-carbs');
+      const appliedProtein = overlay.querySelector<HTMLSpanElement>('#usda-applied-protein');
+      const updateApplied = () => {
+        const gramsVal = parseDecimal2(gramsInput?.value ?? `${defaultGrams}`, 1);
+        const factor = gramsVal / sourceBasisGrams;
+        const scaledCalories = result.calories == null ? null : Math.round(result.calories * factor);
+        const scaledCarbs = result.carbs == null ? null : roundTo1(result.carbs * factor);
+        const scaledProtein = result.protein == null ? null : roundTo1(result.protein * factor);
+        if (appliedCalories) {
+          appliedCalories.textContent =
+            scaledCalories == null ? 'Not available' : `${formatNumberSmart(scaledCalories)} kcal`;
+        }
+        if (appliedCarbs) {
+          appliedCarbs.textContent =
+            scaledCarbs == null ? 'Not available' : `${formatNumberSmart(scaledCarbs)} g`;
+        }
+        if (appliedProtein) {
+          appliedProtein.textContent =
+            scaledProtein == null ? 'Not available' : `${formatNumberSmart(scaledProtein)} g`;
+        }
+      };
+      gramsInput?.addEventListener('input', updateApplied);
+      gramsInput?.addEventListener('blur', () => {
+        if (!gramsInput) return;
+        const parsed = parseDecimal2(gramsInput.value, 1);
+        gramsInput.value = formatNumberSmart(parsed);
+        updateApplied();
+      });
       applyBtn?.addEventListener('click', () => {
-        const gramsVal = parseDecimal2(gramsInput?.value ?? '0', 1);
-        const factor = gramsVal / 100;
+        const gramsVal = parseDecimal2(gramsInput?.value ?? `${defaultGrams}`, 1);
+        const factor = gramsVal / sourceBasisGrams;
+        const scaledCalories = result.calories == null ? null : Math.round(result.calories * factor);
+        const scaledCarbs = result.carbs == null ? null : roundTo1(result.carbs * factor);
+        const scaledProtein = result.protein == null ? null : roundTo1(result.protein * factor);
         const draft: FoodDraft = {
           name: result.description,
-          caloriesPerServing: roundTo2(result.calories * factor),
-          carbsPerServing: roundTo2(result.carbs * factor),
-          proteinPerServing: roundTo2(result.protein * factor),
-          servingLabel: `${formatNumberSmart(gramsVal)} g`,
-          servingSize: gramsVal,
-          servingSizeUnit: 'g',
-          servingSizeGrams: gramsVal,
+          caloriesPerServing: scaledCalories ?? 0,
+          carbsPerServing: scaledCarbs ?? 0,
+          proteinPerServing: scaledProtein ?? 0,
+          servingLabel: usdaServingGrams ? `${formatNumberSmart(gramsVal)} g` : undefined,
+          servingSize: usdaServingGrams ? gramsVal : 100,
+          servingSizeUnit: usdaServingGrams ? 'g' : PER_100G_UNIT,
+          servingSizeGrams: usdaServingGrams ? gramsVal : 100,
         };
         cleanup(draft);
       });
       document.body.appendChild(overlay);
-      gramsInput?.focus();
+      if (gramsInput) {
+        if (!usdaServingGrams) {
+          gramsInput.readOnly = true;
+        }
+        attachSelectAllOnFocus(gramsInput);
+        gramsInput.focus();
+      }
+      updateApplied();
     });
 
   const createDraftFromFood = (saved: Food): FoodDraft => {
@@ -1992,7 +2163,7 @@ const renderFoodForm = (options: {
     if (!selected) {
       return { status: 'cancelled' };
     }
-    const draft = await openUsdaModal(selected, { title: 'Use this result', referenceLabel: 'Reference values' });
+    const draft = await openUsdaModal(selected);
     if (!draft) {
       return { status: 'cancelled' };
     }
@@ -2016,29 +2187,6 @@ const renderFoodForm = (options: {
     });
   };
 
-  const attachSelectAllOnFocus = (input: HTMLInputElement | null) => {
-    if (!input) return;
-    const scheduleSelect = () => {
-      requestAnimationFrame(() => {
-        if (document.activeElement !== input) return;
-        input.select();
-        setTimeout(() => {
-          if (document.activeElement === input) input.select();
-        }, 0);
-      });
-    };
-    const handlePointerUp = (event: Event) => {
-      if (input.selectionStart === input.selectionEnd) {
-        event.preventDefault();
-        scheduleSelect();
-      }
-    };
-    input.addEventListener('focus', scheduleSelect);
-    input.addEventListener('mouseup', handlePointerUp);
-    input.addEventListener('pointerup', handlePointerUp);
-    input.addEventListener('touchend', handlePointerUp);
-  };
-
   attachDecimalInput(caloriesInput, 0, (value) => {
     caloriesVal = value;
   });
@@ -2053,6 +2201,7 @@ const renderFoodForm = (options: {
     servingSize = value;
     servingSizeUnit = 'g';
     updateServingContext({ servingSizeGrams: value });
+    updateFoodFormBasisLabels();
   });
 
   attachSelectAllOnFocus(servingGramsInput);
@@ -2070,9 +2219,9 @@ const renderFoodForm = (options: {
         servingSizeUnit: result.servingSizeUnit,
       });
       const servingFactor = anchor ? anchor.amount / 100 : 1;
-      const calories = result.calories * servingFactor;
-      const carbs = result.carbs * servingFactor;
-      const protein = result.protein * servingFactor;
+      const calories = result.calories == null ? null : result.calories * servingFactor;
+      const carbs = result.carbs == null ? null : result.carbs * servingFactor;
+      const protein = result.protein == null ? null : result.protein * servingFactor;
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'usda-result';
@@ -2082,9 +2231,10 @@ const renderFoodForm = (options: {
           ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
         </div>
         ${result.brandOwner ? `<div class="small-text muted">${result.brandOwner}</div>` : ''}
-        <div class="small-text">${getManualReferenceLabel(anchor)}: ${formatNumberSmart(
-        calories
-      )} kcal • ${formatNumberSmart(carbs)} g carbs • ${formatNumberSmart(protein)} g protein</div>`;
+        <div class="small-text">${getManualReferenceLabel(anchor)}: ${formatUsdaValue(
+        calories,
+        'kcal'
+      )} • ${formatUsdaValue(carbs, 'g')} carbs • ${formatUsdaValue(protein, 'g')} protein</div>`;
       btn.addEventListener('click', async () => {
         const draft = await openUsdaModal(result);
         if (!draft) return;
@@ -2377,7 +2527,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       };
       macroBasisLabel = getEntryMacroBasisLabel(prefill);
       servingSizeGrams = getServingSizeGramsValue(prefill);
-      useGramsInput = isGenericFood(prefill) && Boolean(servingSizeGrams);
+      useGramsInput = !hasTrueServing(prefill) && Boolean(servingSizeGrams);
       grams = null;
     }
     state.prefillFoodId = undefined;
@@ -2398,7 +2548,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       selectedFood = foods.find((f) => f.name === data.foodName) || undefined;
       macroBasisLabel = selectedFood ? getEntryMacroBasisLabel(selectedFood) : macroBasisLabel;
       servingSizeGrams = getServingSizeGramsValue(selectedFood);
-      useGramsInput = isGenericFood(selectedFood) && Boolean(servingSizeGrams);
+      useGramsInput = !hasTrueServing(selectedFood) && Boolean(servingSizeGrams);
       if (useGramsInput && servingSizeGrams) {
         grams = roundTo2(servings * servingSizeGrams);
       }
@@ -2466,7 +2616,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
           protein: food.proteinPerServing,
         };
         servingSizeGrams = getServingSizeGramsValue(food);
-        useGramsInput = isGenericFood(food) && Boolean(servingSizeGrams);
+        useGramsInput = !hasTrueServing(food) && Boolean(servingSizeGrams);
         grams = useGramsInput ? null : grams;
         updateMacroBasisLabels(getEntryMacroBasisLabel(food));
         const input = entryForm.querySelector<HTMLInputElement>('#food');
@@ -2526,12 +2676,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
             value="${formatNumberSmart(servings)}"
             required
           />
-          <p class="small-text muted">Enter amount eaten (minimum 0.01).</p>
+          <p class="small-text muted" id="servings-help">Enter servings eaten (minimum 0.01).</p>
         </div>
         <div id="grams-field" class="is-hidden">
-          <label for="grams">Amount (g)</label>
+          <label for="grams" id="grams-label">Grams eaten</label>
           <input id="grams" name="grams" type="text" inputmode="decimal" placeholder="e.g., 162" />
-          <p class="small-text muted">Enter grams eaten.</p>
+          <p class="small-text muted" id="grams-help">Nutrition is per 100 g.</p>
         </div>
         <div class="totals-panel">
           <div id="entry-totals"></div>
@@ -2589,11 +2739,23 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   const updateEntryInputMode = (food?: Food) => {
     servingSizeGrams = getServingSizeGramsValue(food);
-    useGramsInput = Boolean(food && isGenericFood(food) && servingSizeGrams);
+    useGramsInput = Boolean(food && !hasTrueServing(food) && servingSizeGrams);
     const headingEl = entryForm.querySelector<HTMLHeadingElement>('#entry-amount-heading');
     const servingsField = entryForm.querySelector<HTMLDivElement>('#servings-field');
     const gramsField = entryForm.querySelector<HTMLDivElement>('#grams-field');
-    if (headingEl) headingEl.textContent = useGramsInput ? 'Amount' : 'Servings';
+    const servingsHelp = entryForm.querySelector<HTMLParagraphElement>('#servings-help');
+    const gramsLabel = entryForm.querySelector<HTMLLabelElement>('#grams-label');
+    const gramsHelp = entryForm.querySelector<HTMLParagraphElement>('#grams-help');
+    if (headingEl) headingEl.textContent = useGramsInput ? 'Grams eaten' : 'Servings';
+    if (servingsHelp) {
+      servingsHelp.textContent = 'Enter servings eaten (minimum 0.01).';
+    }
+    if (gramsLabel) {
+      gramsLabel.textContent = 'Grams eaten';
+    }
+    if (gramsHelp) {
+      gramsHelp.textContent = 'Nutrition is per 100 g.';
+    }
     servingsField?.classList.toggle('is-hidden', useGramsInput);
     gramsField?.classList.toggle('is-hidden', !useGramsInput);
     if (useGramsInput) {
@@ -2698,6 +2860,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   attachDecimalInput('#protein', 0, (value) => {
     perServing.protein = value;
   });
+
+  attachSelectAllOnFocus(entryForm.querySelector<HTMLInputElement>('#servings'));
+  attachSelectAllOnFocus(entryForm.querySelector<HTMLInputElement>('#grams'));
+  attachSelectAllOnFocus(entryForm.querySelector<HTMLInputElement>('#calories'));
+  attachSelectAllOnFocus(entryForm.querySelector<HTMLInputElement>('#carbs'));
+  attachSelectAllOnFocus(entryForm.querySelector<HTMLInputElement>('#protein'));
 
   if (state.prefillFoodId) {
     setTimeout(() => {
