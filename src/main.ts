@@ -337,11 +337,6 @@ const renderHeroMetrics = (options: {
   `;
 };
 
-const formatUsdaValue = (value: number | null, unit: string) => {
-  if (value == null) return 'Not available';
-  return `${formatNumberSmart(value)} ${unit}`;
-};
-
 const getUsdaServingGrams = (result: UsdaFoodResult) => {
   const servingSize = result.servingSize;
   const normalizedUnit = normalizeServingUnit(result.servingSizeUnit);
@@ -355,6 +350,10 @@ type UsdaFoodResult = {
   description: string;
   dataType?: string;
   brandOwner?: string;
+  brandName?: string;
+  foodCategory?: string;
+  brandedFoodCategory?: string;
+  labelCalories?: number | null;
   calories: number | null;
   carbs: number | null;
   protein: number | null;
@@ -397,11 +396,18 @@ const searchUsdaFoods = async (term: string): Promise<UsdaFoodResult[]> => {
       return Number.isFinite(parsed) ? parsed : null;
     };
     const servingSizeValue = Number(food.servingSize);
+    const labelCaloriesValue = Number(food?.labelNutrients?.calories?.value);
+    const foodCategory =
+      typeof food.foodCategory === 'string' ? food.foodCategory : food.foodCategory?.description ?? undefined;
     return {
       id: String(food.fdcId ?? food.description),
-      description: String(food.description ?? 'Food'),
+      description: String(food.description ?? ''),
       dataType: food.dataType ? String(food.dataType) : undefined,
       brandOwner: food.brandOwner ? String(food.brandOwner) : undefined,
+      brandName: food.brandName ? String(food.brandName) : undefined,
+      foodCategory: foodCategory ? String(foodCategory) : undefined,
+      brandedFoodCategory: food.brandedFoodCategory ? String(food.brandedFoodCategory) : undefined,
+      labelCalories: Number.isFinite(labelCaloriesValue) ? labelCaloriesValue : null,
       calories: findNutrient('1008'),
       carbs: findNutrient('1005'),
       protein: findNutrient('1003'),
@@ -446,11 +452,18 @@ const searchUsdaFoodsByBarcode = async (barcode: string): Promise<UsdaFoodResult
       return Number.isFinite(parsed) ? parsed : null;
     };
     const servingSizeValue = Number(food.servingSize);
+    const labelCaloriesValue = Number(food?.labelNutrients?.calories?.value);
+    const foodCategory =
+      typeof food.foodCategory === 'string' ? food.foodCategory : food.foodCategory?.description ?? undefined;
     return {
       id: String(food.fdcId ?? food.description),
-      description: String(food.description ?? 'Food'),
+      description: String(food.description ?? ''),
       dataType: food.dataType ? String(food.dataType) : undefined,
       brandOwner: food.brandOwner ? String(food.brandOwner) : undefined,
+      brandName: food.brandName ? String(food.brandName) : undefined,
+      foodCategory: foodCategory ? String(foodCategory) : undefined,
+      brandedFoodCategory: food.brandedFoodCategory ? String(food.brandedFoodCategory) : undefined,
+      labelCalories: Number.isFinite(labelCaloriesValue) ? labelCaloriesValue : null,
       calories: findNutrient('1008'),
       carbs: findNutrient('1005'),
       protein: findNutrient('1003'),
@@ -2229,32 +2242,57 @@ const renderFoodForm = (options: {
       resultsEl.innerHTML = '<div class="small-text muted lookup-empty">No results found.</div>';
       return;
     }
-    results.forEach((result) => {
-      const anchor = resolveServingAnchor({
-        servingSize: result.servingSize,
-        servingSizeUnit: result.servingSizeUnit,
-      });
+    const normalizeText = (value?: string | null) => (value ?? '').trim();
+    const query = normalizeText(state.usdaSearchTerm).toLowerCase();
+    const isQueryMatch = (value: string) => Boolean(value) && value.toLowerCase() === query;
+    const getUsdaTitle = (result: UsdaFoodResult) => {
+      const description = normalizeText(result.description);
+      const brandName = normalizeText(result.brandName);
+      const brandOwner = normalizeText(result.brandOwner);
+      const foodCategory = normalizeText(result.brandedFoodCategory ?? result.foodCategory);
+      const dataType = normalizeText(result.dataType);
       const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const servingFactor = anchor ? anchor.amount / 100 : 1;
-      const calories = result.calories == null ? null : result.calories * servingFactor;
-      const carbs = result.carbs == null ? null : result.carbs * servingFactor;
-      const protein = result.protein == null ? null : result.protein * servingFactor;
-      const servingLabel = formatUsdaServing(result);
-      const metaParts = [
-        result.brandOwner,
-        result.dataType,
-        servingLabel ? `Serving: ${servingLabel}` : null,
-        `${formatUsdaValue(calories, 'kcal')} kcal`,
-        `${formatUsdaValue(carbs, 'g')} carbs`,
-        `${formatUsdaValue(protein, 'g')} protein`,
-      ].filter(Boolean) as string[];
-      const metaLine = metaParts.join(' • ');
+      const hasAlternative = Boolean(brandName || brandOwner || foodCategory);
+      if (description && (!isQueryMatch(description) || !hasAlternative)) {
+        return description;
+      }
+      if (isBranded && description) {
+        if (brandName) return `${brandName} ${description}`.trim();
+        if (brandOwner) return `${brandOwner} ${description}`.trim();
+      }
+      if (brandName) return brandName;
+      if (brandOwner) return brandOwner;
+      if (foodCategory) return foodCategory;
+      if (description) return description;
+      if (dataType) return `${dataType} food`;
+      return 'Food';
+    };
+    const getUsdaSubtitle = (result: UsdaFoodResult) => {
+      const isBranded = result.dataType?.toLowerCase() === 'branded';
+      const source = normalizeText(isBranded ? result.brandOwner ?? result.brandName : result.foodCategory);
+      const calories =
+        Number.isFinite(result.labelCalories) && result.labelCalories != null
+          ? result.labelCalories
+          : result.calories;
+      const segments = [];
+      if (source) {
+        segments.push(source);
+      }
+      if (calories != null && Number.isFinite(calories)) {
+        segments.push(`${formatNumberSmart(calories)} kcal`);
+      }
+      return segments.join(' • ');
+    };
+    results.forEach((result) => {
+      const isBranded = result.dataType?.toLowerCase() === 'branded';
+      const metaLine = getUsdaSubtitle(result);
+      const title = getUsdaTitle(result);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'usda-result';
       btn.innerHTML = `
         <div class="usda-result__title-row">
-          <div class="usda-result__title">${result.description}</div>
+          <div class="usda-result__title">${title}</div>
           ${isBranded ? `<span class="badge badge--branded usda-result__badge">Branded</span>` : ''}
         </div>
         <div class="usda-result__meta">${metaLine}</div>`;
