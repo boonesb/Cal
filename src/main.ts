@@ -1474,6 +1474,16 @@ const renderFoodForm = (options: {
     servingSizeGrams = 100;
   }
   let previousDraft: FoodDraft | null = null;
+  let hasScanValuesApplied = false;
+  let scanSummary:
+    | {
+        sourceLabel: string;
+        basisLabel: string;
+        calories: number;
+        carbs: number;
+        protein: number;
+      }
+    | null = null;
   let currentBarcode = food?.barcode ? normalizeBarcode(food.barcode) : undefined;
   let previousBarcode: string | undefined;
   const scanSupported = Boolean(navigator.mediaDevices?.getUserMedia);
@@ -1515,18 +1525,26 @@ const renderFoodForm = (options: {
         }
       </div>
       <div class="autofill-meta">
-        <div id="serving-context" class="small-text muted"></div>
-        <div id="autofill-status" class="autofill-status is-hidden" role="status">
-          <span id="autofill-status-text"></span>
-          <button type="button" class="ghost small-button" id="autofill-reset">Reset to previous values</button>
+        <div id="scan-summary" class="scan-summary is-hidden" role="status">
+          <div class="scan-summary__header">
+            <div>
+              <p class="scan-summary__eyebrow">Scanned nutrition data</p>
+              <p class="small-text muted" id="scan-summary-source"></p>
+            </div>
+            <button type="button" class="ghost small-button" id="discard-scan">Discard scanned values</button>
+          </div>
+          <div class="scan-summary__details">
+            <div id="scan-summary-basis" class="small-text"></div>
+            <div id="scan-summary-macros"></div>
+          </div>
         </div>
       </div>
     </div>
     <div class="form-section manual-section">
       <div class="section-heading">
-        <p class="section-eyebrow">Or enter it manually</p>
-        <h3>Or enter it manually</h3>
-        <p class="small-text muted">Use this when you can’t find an exact match.</p>
+        <p class="section-eyebrow">Edit values</p>
+        <h3>Edit values</h3>
+        <p class="small-text muted">Adjust the values before saving.</p>
       </div>
       <div class="manual-card">
         <div class="field-group">
@@ -1614,10 +1632,11 @@ const renderFoodForm = (options: {
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
-  const servingContextEl = form.querySelector<HTMLDivElement>('#serving-context');
-  const autofillStatus = form.querySelector<HTMLDivElement>('#autofill-status');
-  const autofillStatusText = form.querySelector<HTMLSpanElement>('#autofill-status-text');
-  const autofillReset = form.querySelector<HTMLButtonElement>('#autofill-reset');
+  const scanSummaryEl = form.querySelector<HTMLDivElement>('#scan-summary');
+  const scanSummarySource = form.querySelector<HTMLParagraphElement>('#scan-summary-source');
+  const scanSummaryBasis = form.querySelector<HTMLDivElement>('#scan-summary-basis');
+  const scanSummaryMacros = form.querySelector<HTMLDivElement>('#scan-summary-macros');
+  const discardScanButton = form.querySelector<HTMLButtonElement>('#discard-scan');
 
   const updateServingContext = (draft?: Partial<FoodDraft>) => {
     if (draft && 'servingLabel' in draft) servingLabel = draft.servingLabel;
@@ -1631,9 +1650,6 @@ const renderFoodForm = (options: {
       servingLabel,
     });
     servingLabel = anchor?.label;
-    if (servingContextEl) {
-      servingContextEl.textContent = getManualNutritionBasisLabel(servingSizeGrams);
-    }
   };
 
   updateServingContext({ servingLabel, servingSize, servingSizeUnit, servingSizeGrams });
@@ -1653,11 +1669,42 @@ const renderFoodForm = (options: {
     if (barcodeStatus) barcodeStatus.textContent = message;
   };
 
-  const setAutofillStatus = (message: string, allowReset: boolean) => {
-    if (!autofillStatus || !autofillStatusText || !autofillReset) return;
-    autofillStatusText.textContent = message;
-    autofillStatus.classList.remove('is-hidden');
-    autofillReset.classList.toggle('is-hidden', !allowReset);
+  const setScanSummary = (summary: typeof scanSummary) => {
+    scanSummary = summary;
+    hasScanValuesApplied = Boolean(summary);
+    if (!scanSummaryEl || !scanSummarySource || !scanSummaryBasis || !scanSummaryMacros) return;
+    if (!summary) {
+      scanSummaryEl.classList.add('is-hidden');
+      scanSummarySource.textContent = '';
+      scanSummaryBasis.textContent = '';
+      scanSummaryMacros.innerHTML = '';
+      return;
+    }
+    scanSummarySource.textContent = summary.sourceLabel;
+    scanSummaryBasis.textContent = summary.basisLabel;
+    scanSummaryMacros.innerHTML = renderMacroSummary({
+      calories: summary.calories,
+      carbs: summary.carbs,
+      protein: summary.protein,
+      variant: 'compact',
+    });
+    scanSummaryEl.classList.remove('is-hidden');
+  };
+
+  const buildScanSummary = (draft: FoodDraft, sourceLabel: string) => {
+    const anchor = resolveServingAnchor({
+      servingSizeGrams: draft.servingSizeGrams,
+      servingSize: draft.servingSize,
+      servingSizeUnit: draft.servingSizeUnit,
+      servingLabel: draft.servingLabel,
+    });
+    return {
+      sourceLabel,
+      basisLabel: anchor ? `Per serving (${anchor.label})` : 'Per serving',
+      calories: draft.caloriesPerServing,
+      carbs: draft.carbsPerServing,
+      protein: draft.proteinPerServing,
+    };
   };
 
   const captureCurrentDraft = (): FoodDraft => ({
@@ -1711,7 +1758,7 @@ const renderFoodForm = (options: {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
     restoreDraft(draft);
-    setAutofillStatus('Filled from USDA lookup.', Boolean(previousDraft));
+    setScanSummary(buildScanSummary(draft, 'From nutrition lookup.'));
     clearLookupResults();
     nameInput?.focus();
   };
@@ -1742,7 +1789,7 @@ const renderFoodForm = (options: {
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
-    setAutofillStatus('Based on barcode data — please review before saving.', Boolean(previousDraft));
+    setScanSummary(buildScanSummary(draft, 'From barcode scan.'));
     clearLookupResults();
   };
 
@@ -1969,6 +2016,29 @@ const renderFoodForm = (options: {
     });
   };
 
+  const attachSelectAllOnFocus = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    const scheduleSelect = () => {
+      requestAnimationFrame(() => {
+        if (document.activeElement !== input) return;
+        input.select();
+        setTimeout(() => {
+          if (document.activeElement === input) input.select();
+        }, 0);
+      });
+    };
+    const handlePointerUp = (event: Event) => {
+      if (input.selectionStart === input.selectionEnd) {
+        event.preventDefault();
+        scheduleSelect();
+      }
+    };
+    input.addEventListener('focus', scheduleSelect);
+    input.addEventListener('mouseup', handlePointerUp);
+    input.addEventListener('pointerup', handlePointerUp);
+    input.addEventListener('touchend', handlePointerUp);
+  };
+
   attachDecimalInput(caloriesInput, 0, (value) => {
     caloriesVal = value;
   });
@@ -1984,6 +2054,11 @@ const renderFoodForm = (options: {
     servingSizeUnit = 'g';
     updateServingContext({ servingSizeGrams: value });
   });
+
+  attachSelectAllOnFocus(servingGramsInput);
+  attachSelectAllOnFocus(caloriesInput);
+  attachSelectAllOnFocus(carbsInput);
+  attachSelectAllOnFocus(proteinInput);
 
   const renderLookupResults = (results: UsdaFoodResult[]) => {
     if (!lookupResults) return;
@@ -2056,11 +2131,11 @@ const renderFoodForm = (options: {
     }
   });
 
-  autofillReset?.addEventListener('click', () => {
+  discardScanButton?.addEventListener('click', () => {
     if (!previousDraft) return;
     restoreDraft(previousDraft);
     currentBarcode = previousBarcode;
-    setAutofillStatus('Restored previous values.', false);
+    setScanSummary(null);
     previousDraft = null;
     previousBarcode = undefined;
     setBarcodeStatus('');
