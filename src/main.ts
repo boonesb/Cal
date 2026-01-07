@@ -826,7 +826,7 @@ const waterAmountChooser = (amounts: number[]) => {
 };
 
 type BarcodeLookupResult =
-  | { status: 'draft'; draft: FoodDraft; sourceLabel: string; preferUsdaBasis?: boolean }
+  | { status: 'draft'; draft: FoodDraft; sourceLabel: string; preferUsdaBasis?: boolean; isBranded?: boolean }
   | { status: 'not-found' }
   | { status: 'cancelled' };
 
@@ -835,7 +835,7 @@ const createBarcodeScanModal = (options: {
   onDetected: (
     draft: FoodDraft,
     barcode: string,
-    summary: { sourceLabel: string; preferUsdaBasis?: boolean }
+    summary: { sourceLabel: string; preferUsdaBasis?: boolean; isBranded?: boolean }
   ) => Promise<void>;
 }) => {
   const overlay = document.createElement('div');
@@ -966,6 +966,7 @@ const createBarcodeScanModal = (options: {
       await options.onDetected(result.draft, normalized, {
         sourceLabel: result.sourceLabel,
         preferUsdaBasis: result.preferUsdaBasis,
+        isBranded: result.isBranded,
       });
       close();
     } catch (err) {
@@ -1180,7 +1181,7 @@ const renderNav = () => {
     <div class="header-main">
       <h1>Calorie Tracker</h1>
       <div class="header-actions">
-        <button id="nav-add-entry" class="primary-cta nav-add-entry-button ${navActive('entry')}">Add entry</button>
+        <button id="nav-add-entry" class="primary-cta nav-add-entry-button">Add entry</button>
         <div class="menu" id="nav-menu-wrapper">
           <button id="nav-menu-toggle" class="icon-button ghost" aria-haspopup="true" aria-expanded="false">⋯</button>
           <div id="nav-menu" class="menu-popover" role="menu">
@@ -1544,22 +1545,14 @@ const renderFoodForm = (options: {
     servingSizeGrams = 100;
   }
   let previousDraft: FoodDraft | null = null;
-  let hasScanValuesApplied = false;
-  let scanSummary:
-    | {
-        title: string;
-        sourceLabel: string;
-        basisLabel: string;
-        calories: number;
-        carbs: number;
-        protein: number;
-      }
-    | null = null;
+  let initialDraft: FoodDraft | null = null;
+  let appliedSummary: { draft: FoodDraft; isBranded: boolean } | null = null;
+  let addFoodMode: 'discovery' | 'summary' | 'edit' = food ? 'edit' : 'discovery';
   let currentBarcode = food?.barcode ? normalizeBarcode(food.barcode) : undefined;
   let previousBarcode: string | undefined;
   const scanSupported = Boolean(navigator.mediaDevices?.getUserMedia);
   const form = document.createElement('form');
-  form.className = 'form-grid form-grid--stack';
+  form.className = 'form-grid form-grid--stack add-food-form';
   form.innerHTML = `
     <div class="form-section find-section">
       <div class="section-heading">
@@ -1593,20 +1586,27 @@ const renderFoodForm = (options: {
             : ''
         }
       </div>
-      <div class="autofill-meta">
-        <div id="scan-summary" class="scan-summary is-hidden" role="status">
-          <div class="scan-summary__header">
-            <div>
-              <p class="scan-summary__eyebrow" id="scan-summary-title">Applied nutrition data</p>
-              <p class="small-text muted" id="scan-summary-source"></p>
+      <div class="find-actions-footer">
+        <button type="button" id="enter-manual" class="secondary">Enter values manually</button>
+      </div>
+    </div>
+    <div class="form-section summary-section">
+      <div class="summary-card" id="food-summary">
+        <div class="summary-card__header">
+          <div>
+            <div class="summary-card__title" id="summary-name"></div>
+            <div class="summary-card__meta">
+              <span class="badge badge--branded is-hidden" id="summary-branded">Branded</span>
+              <span class="summary-card__basis" id="summary-basis"></span>
             </div>
-            <button type="button" class="ghost small-button" id="discard-scan">Discard applied values</button>
-          </div>
-          <div class="scan-summary__details">
-            <div id="scan-summary-basis" class="small-text"></div>
-            <div id="scan-summary-macros"></div>
           </div>
         </div>
+        <div id="summary-macros"></div>
+      </div>
+      <div class="summary-actions">
+        <button type="submit" id="summary-save">Save food</button>
+        <button type="button" class="secondary" id="summary-edit">Edit values</button>
+        <button type="button" class="ghost" id="summary-change">Change selection</button>
       </div>
     </div>
     <div class="form-section manual-section">
@@ -1713,12 +1713,13 @@ const renderFoodForm = (options: {
   const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
-  const scanSummaryEl = form.querySelector<HTMLDivElement>('#scan-summary');
-  const scanSummaryTitle = form.querySelector<HTMLParagraphElement>('#scan-summary-title');
-  const scanSummarySource = form.querySelector<HTMLParagraphElement>('#scan-summary-source');
-  const scanSummaryBasis = form.querySelector<HTMLDivElement>('#scan-summary-basis');
-  const scanSummaryMacros = form.querySelector<HTMLDivElement>('#scan-summary-macros');
-  const discardScanButton = form.querySelector<HTMLButtonElement>('#discard-scan');
+  const enterManualButton = form.querySelector<HTMLButtonElement>('#enter-manual');
+  const summaryName = form.querySelector<HTMLDivElement>('#summary-name');
+  const summaryBasis = form.querySelector<HTMLSpanElement>('#summary-basis');
+  const summaryMacros = form.querySelector<HTMLDivElement>('#summary-macros');
+  const summaryBranded = form.querySelector<HTMLSpanElement>('#summary-branded');
+  const summaryEditButton = form.querySelector<HTMLButtonElement>('#summary-edit');
+  const summaryChangeButton = form.querySelector<HTMLButtonElement>('#summary-change');
 
   const updateServingContext = (draft?: Partial<FoodDraft>) => {
     if (draft && 'servingLabel' in draft) servingLabel = draft.servingLabel;
@@ -1769,57 +1770,46 @@ const renderFoodForm = (options: {
     if (barcodeStatus) barcodeStatus.textContent = message;
   };
 
-  const setScanSummary = (summary: typeof scanSummary) => {
-    scanSummary = summary;
-    hasScanValuesApplied = Boolean(summary);
-    form.classList.toggle('review-mode', Boolean(summary));
-    if (!scanSummaryEl || !scanSummarySource || !scanSummaryBasis || !scanSummaryMacros || !scanSummaryTitle) return;
-    if (!summary) {
-      scanSummaryEl.classList.add('is-hidden');
-      scanSummaryTitle.textContent = 'Applied nutrition data';
-      scanSummarySource.textContent = '';
-      scanSummaryBasis.textContent = '';
-      scanSummaryMacros.innerHTML = '';
-      return;
+  const setAddFoodMode = (mode: 'discovery' | 'summary' | 'edit', options?: { focus?: boolean }) => {
+    addFoodMode = mode;
+    form.classList.toggle('add-food--discovery', mode === 'discovery');
+    form.classList.toggle('add-food--summary', mode === 'summary');
+    form.classList.toggle('add-food--edit', mode === 'edit');
+    if (mode === 'edit' && options?.focus) {
+      nameInput?.focus();
     }
-    scanSummaryTitle.textContent = summary.title;
-    scanSummarySource.textContent = summary.sourceLabel;
-    scanSummaryBasis.textContent = summary.basisLabel;
-    scanSummaryMacros.innerHTML = renderMacroSummary({
-      calories: summary.calories,
-      carbs: summary.carbs,
-      protein: summary.protein,
-      variant: 'compact',
-    });
-    scanSummaryEl.classList.remove('is-hidden');
   };
 
-  const buildScanSummary = (
-    draft: FoodDraft,
-    options: { sourceLabel: string; title: string; preferUsdaBasis?: boolean }
-  ) => {
-    const anchor = resolveServingAnchor({
-      servingSizeGrams: draft.servingSizeGrams,
-      servingSize: draft.servingSize,
-      servingSizeUnit: draft.servingSizeUnit,
-      servingLabel: draft.servingLabel,
-    });
+  const getSummaryBasisLabel = (draft: FoodDraft) => {
+    if (!draft.servingSizeGrams || !Number.isFinite(draft.servingSizeGrams) || draft.servingSizeGrams <= 0) {
+      return 'Per 100 g';
+    }
     const isPer100g = isPer100gUnit(draft.servingSizeUnit);
-    const basisLabel = isPer100g
-      ? options.preferUsdaBasis
-        ? 'Based on USDA standard: 100 g'
-        : 'Based on 100 g'
-      : anchor
-        ? `Based on ${anchor.label}`
-        : 'Based on serving size';
-    return {
-      title: options.title,
-      sourceLabel: options.sourceLabel,
-      basisLabel,
+    if (isPer100g) {
+      return 'Per 100 g';
+    }
+    return `Per serving: ${formatNumberSmart(draft.servingSizeGrams)} g`;
+  };
+
+  const setSummaryCard = (draft: FoodDraft | null, meta?: { isBranded?: boolean }) => {
+    appliedSummary = draft ? { draft, isBranded: meta?.isBranded ?? false } : null;
+    if (!summaryName || !summaryBasis || !summaryMacros || !summaryBranded) return;
+    if (!draft) {
+      summaryName.textContent = '';
+      summaryBasis.textContent = '';
+      summaryMacros.innerHTML = '';
+      summaryBranded.classList.add('is-hidden');
+      return;
+    }
+    summaryName.textContent = draft.name;
+    summaryBasis.textContent = getSummaryBasisLabel(draft);
+    summaryMacros.innerHTML = renderMacroSummary({
       calories: draft.caloriesPerServing,
       carbs: draft.carbsPerServing,
       protein: draft.proteinPerServing,
-    };
+      variant: 'compact',
+    });
+    summaryBranded.classList.toggle('is-hidden', !appliedSummary?.isBranded);
   };
 
   const captureCurrentDraft = (): FoodDraft => ({
@@ -1832,6 +1822,9 @@ const renderFoodForm = (options: {
     servingSizeUnit,
     servingSizeGrams,
   });
+
+  initialDraft = captureCurrentDraft();
+  setAddFoodMode(addFoodMode);
 
   const restoreDraft = (draft: FoodDraft) => {
     caloriesVal = draft.caloriesPerServing;
@@ -1891,25 +1884,19 @@ const renderFoodForm = (options: {
     };
   };
 
-  const applyDraftFromLookup = (draft: FoodDraft) => {
+  const applyDraftFromLookup = (draft: FoodDraft, meta?: { isBranded?: boolean }) => {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
     restoreDraft(draft);
-    setScanSummary(
-      buildScanSummary(draft, {
-        sourceLabel: 'Source: USDA FoodData Central',
-        title: 'USDA nutrition applied',
-        preferUsdaBasis: true,
-      })
-    );
+    setSummaryCard(draft, { isBranded: meta?.isBranded });
     clearLookupResults();
-    nameInput?.focus();
+    setAddFoodMode('summary');
   };
 
   const applyDraftFromBarcode = (
     draft: FoodDraft,
     barcode: string | undefined,
-    summary: { sourceLabel: string; preferUsdaBasis?: boolean }
+    summary: { sourceLabel: string; preferUsdaBasis?: boolean; isBranded?: boolean }
   ) => {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
@@ -1935,20 +1922,14 @@ const renderFoodForm = (options: {
       const gramsValue = draft.servingSizeGrams ?? servingSizeGrams;
       servingGramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
     }
-    caloriesInput?.focus();
     setBarcodeStatus(
       barcode
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
         : ''
     );
-    setScanSummary(
-      buildScanSummary(draft, {
-        sourceLabel: summary.sourceLabel,
-        title: 'Nutrition applied',
-        preferUsdaBasis: summary.preferUsdaBasis,
-      })
-    );
+    setSummaryCard(draft, { isBranded: summary.isBranded });
     clearLookupResults();
+    setAddFoodMode('summary');
   };
 
   const openBarcodeSelectionModal = <T,>(options: {
@@ -2007,134 +1988,6 @@ const renderFoodForm = (options: {
       document.body.appendChild(overlay);
     });
 
-  const openUsdaModal = (result: UsdaFoodResult, options?: { title?: string }): Promise<FoodDraft | null> =>
-    new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'modal-overlay';
-      const title = options?.title ?? 'Review USDA Nutrition';
-      const usdaServingGrams = getUsdaServingGrams(result);
-      const sourceBasisGrams = usdaServingGrams ?? 100;
-      const defaultGrams = usdaServingGrams ?? 100;
-      const basisLine = usdaServingGrams
-        ? `Based on USDA serving: ${formatNumberSmart(usdaServingGrams)} g`
-        : 'Based on USDA standard: 100 g';
-      const gramsLabel = usdaServingGrams ? 'My serving (g)' : 'Grams eaten';
-      overlay.innerHTML = `
-        <div class="modal">
-          <div class="modal__header">
-            <h3>${title}</h3>
-            <button type="button" class="ghost icon-button" id="close-usda-modal">✕</button>
-          </div>
-          <div class="modal__body">
-            <div class="usda-modal__section">
-              <p class="section-eyebrow">USDA values (as provided)</p>
-              <div class="usda-modal__summary">
-                <div class="usda-result__title">${result.description}</div>
-                <div class="usda-result__meta">
-                  ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
-                  ${result.brandOwner ? `<span class="small-text muted">${result.brandOwner}</span>` : ''}
-                </div>
-              </div>
-              <p class="small-text muted">${basisLine}</p>
-              <div class="usda-modal__values">
-                <div><span>Calories</span><span>${formatUsdaValue(result.calories, 'kcal')}</span></div>
-                <div><span>Carbs</span><span>${formatUsdaValue(result.carbs, 'g')}</span></div>
-                <div><span>Protein</span><span>${formatUsdaValue(result.protein, 'g')}</span></div>
-              </div>
-            </div>
-            <div class="usda-modal__section">
-              <label for="usda-serving-grams">${gramsLabel}</label>
-              <input id="usda-serving-grams" type="text" inputmode="decimal" value="${formatNumberSmart(
-                defaultGrams
-              )}" />
-              <p class="small-text muted">USDA values are based on ${basisLine.replace('Based on ', '').replace(/\.$/, '')}.</p>
-              <p class="small-text muted">The numbers below show what will be applied to your food for the grams you enter.</p>
-            </div>
-            <div class="usda-modal__section">
-              <p class="section-eyebrow">Applied to form</p>
-              <div class="usda-modal__values">
-                <div><span>Calories</span><span id="usda-applied-calories"></span></div>
-                <div><span>Carbs</span><span id="usda-applied-carbs"></span></div>
-                <div><span>Protein</span><span id="usda-applied-protein"></span></div>
-              </div>
-            </div>
-          </div>
-          <div class="footer-actions modal__actions">
-            <button type="button" class="secondary" id="cancel-usda">Cancel</button>
-            <button type="button" id="apply-usda">Apply to form</button>
-          </div>
-        </div>
-      `;
-      const removeModal = () => overlay.remove();
-      const cleanup = (draft: FoodDraft | null) => {
-        removeModal();
-        resolve(draft);
-      };
-      overlay.addEventListener('click', (event) => {
-        if (event.target === overlay) cleanup(null);
-      });
-      overlay.querySelector('#cancel-usda')?.addEventListener('click', () => cleanup(null));
-      overlay.querySelector('#close-usda-modal')?.addEventListener('click', () => cleanup(null));
-      const applyBtn = overlay.querySelector<HTMLButtonElement>('#apply-usda');
-      const gramsInput = overlay.querySelector<HTMLInputElement>('#usda-serving-grams');
-      const appliedCalories = overlay.querySelector<HTMLSpanElement>('#usda-applied-calories');
-      const appliedCarbs = overlay.querySelector<HTMLSpanElement>('#usda-applied-carbs');
-      const appliedProtein = overlay.querySelector<HTMLSpanElement>('#usda-applied-protein');
-      const updateApplied = () => {
-        const gramsVal = parseDecimal2(gramsInput?.value ?? `${defaultGrams}`, 1);
-        const factor = gramsVal / sourceBasisGrams;
-        const scaledCalories = result.calories == null ? null : Math.round(result.calories * factor);
-        const scaledCarbs = result.carbs == null ? null : roundTo1(result.carbs * factor);
-        const scaledProtein = result.protein == null ? null : roundTo1(result.protein * factor);
-        if (appliedCalories) {
-          appliedCalories.textContent =
-            scaledCalories == null ? 'Not available' : `${formatNumberSmart(scaledCalories)} kcal`;
-        }
-        if (appliedCarbs) {
-          appliedCarbs.textContent =
-            scaledCarbs == null ? 'Not available' : `${formatNumberSmart(scaledCarbs)} g`;
-        }
-        if (appliedProtein) {
-          appliedProtein.textContent =
-            scaledProtein == null ? 'Not available' : `${formatNumberSmart(scaledProtein)} g`;
-        }
-      };
-      gramsInput?.addEventListener('input', updateApplied);
-      gramsInput?.addEventListener('blur', () => {
-        if (!gramsInput) return;
-        const parsed = parseDecimal2(gramsInput.value, 1);
-        gramsInput.value = formatNumberSmart(parsed);
-        updateApplied();
-      });
-      applyBtn?.addEventListener('click', () => {
-        const gramsVal = parseDecimal2(gramsInput?.value ?? `${defaultGrams}`, 1);
-        const factor = gramsVal / sourceBasisGrams;
-        const scaledCalories = result.calories == null ? null : Math.round(result.calories * factor);
-        const scaledCarbs = result.carbs == null ? null : roundTo1(result.carbs * factor);
-        const scaledProtein = result.protein == null ? null : roundTo1(result.protein * factor);
-        const draft: FoodDraft = {
-          name: result.description,
-          caloriesPerServing: scaledCalories ?? 0,
-          carbsPerServing: scaledCarbs ?? 0,
-          proteinPerServing: scaledProtein ?? 0,
-          servingLabel: usdaServingGrams ? `${formatNumberSmart(gramsVal)} g` : undefined,
-          servingSize: usdaServingGrams ? gramsVal : 100,
-          servingSizeUnit: usdaServingGrams ? 'g' : PER_100G_UNIT,
-          servingSizeGrams: usdaServingGrams ? gramsVal : 100,
-        };
-        cleanup(draft);
-      });
-      document.body.appendChild(overlay);
-      if (gramsInput) {
-        if (!usdaServingGrams) {
-          gramsInput.readOnly = true;
-        }
-        attachSelectAllOnFocus(gramsInput);
-        gramsInput.focus();
-      }
-      updateApplied();
-    });
-
   const createDraftFromFood = (saved: Food): FoodDraft => {
     const anchor = resolveServingAnchor({
       servingSizeGrams: saved.servingSizeGrams,
@@ -2167,7 +2020,12 @@ const renderFoodForm = (options: {
       (foodItem) => normalizeBarcode(foodItem.barcode ?? '') === normalized
     );
     if (savedMatches.length === 1) {
-      return { status: 'draft', draft: createDraftFromFood(savedMatches[0]), sourceLabel: 'Source: Saved food' };
+      return {
+        status: 'draft',
+        draft: createDraftFromFood(savedMatches[0]),
+        sourceLabel: 'Source: Saved food',
+        isBranded: false,
+      };
     }
     if (savedMatches.length > 1) {
       const chosen = await openBarcodeSelectionModal<Food>({
@@ -2181,12 +2039,17 @@ const renderFoodForm = (options: {
         })),
       });
       if (!chosen) return { status: 'cancelled' };
-      return { status: 'draft', draft: createDraftFromFood(chosen), sourceLabel: 'Source: Saved food' };
+      return {
+        status: 'draft',
+        draft: createDraftFromFood(chosen),
+        sourceLabel: 'Source: Saved food',
+        isBranded: false,
+      };
     }
 
     const offDraft = await lookupOpenFoodFacts(normalized);
     if (offDraft) {
-      return { status: 'draft', draft: offDraft, sourceLabel: 'Source: Open Food Facts' };
+      return { status: 'draft', draft: offDraft, sourceLabel: 'Source: Open Food Facts', isBranded: false };
     }
 
     const usdaResults = await searchUsdaFoodsByBarcode(normalized);
@@ -2213,7 +2076,13 @@ const renderFoodForm = (options: {
       return { status: 'cancelled' };
     }
     const draft = createUsdaDraftFromResult(selected);
-    return { status: 'draft', draft, sourceLabel: 'Source: USDA FoodData Central', preferUsdaBasis: true };
+    return {
+      status: 'draft',
+      draft,
+      sourceLabel: 'Source: USDA FoodData Central',
+      preferUsdaBasis: true,
+      isBranded: selected.dataType?.toLowerCase() === 'branded',
+    };
   };
 
   const attachDecimalInput = (
@@ -2264,6 +2133,7 @@ const renderFoodForm = (options: {
         servingSize: result.servingSize,
         servingSizeUnit: result.servingSizeUnit,
       });
+      const isBranded = result.dataType?.toLowerCase() === 'branded';
       const servingFactor = anchor ? anchor.amount / 100 : 1;
       const calories = result.calories == null ? null : result.calories * servingFactor;
       const carbs = result.carbs == null ? null : result.carbs * servingFactor;
@@ -2275,7 +2145,7 @@ const renderFoodForm = (options: {
       btn.innerHTML = `
         <div class="usda-result__header">
           <div class="usda-result__title">${result.description}</div>
-          ${result.dataType ? `<span class="badge badge--type">${result.dataType}</span>` : ''}
+          ${isBranded ? `<span class="badge badge--branded">Branded</span>` : ''}
         </div>
         ${result.brandOwner ? `<div class="small-text muted">${result.brandOwner}</div>` : ''}
         ${servingLabel ? `<div class="small-text">Serving: ${servingLabel}</div>` : ''}
@@ -2287,7 +2157,7 @@ const renderFoodForm = (options: {
         const draft = createUsdaDraftFromResult(result);
         const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
         if (!confirmed) return;
-        applyDraftFromLookup(draft);
+        applyDraftFromLookup(draft, { isBranded });
         if (lookupInput) lookupInput.value = result.description;
         setBarcodeStatus('');
       });
@@ -2328,16 +2198,6 @@ const renderFoodForm = (options: {
     }
   });
 
-  discardScanButton?.addEventListener('click', () => {
-    if (!previousDraft) return;
-    restoreDraft(previousDraft);
-    currentBarcode = previousBarcode;
-    setScanSummary(null);
-    previousDraft = null;
-    previousBarcode = undefined;
-    setBarcodeStatus('');
-  });
-
   scanBtn?.addEventListener('click', () => {
     createBarcodeScanModal({
       onLookup: async (barcode) => lookupBarcode(barcode),
@@ -2347,6 +2207,28 @@ const renderFoodForm = (options: {
         applyDraftFromBarcode(draft, barcode, summary);
       },
     });
+  });
+
+  enterManualButton?.addEventListener('click', () => {
+    setSummaryCard(null);
+    setAddFoodMode('edit', { focus: true });
+  });
+
+  summaryEditButton?.addEventListener('click', () => {
+    setAddFoodMode('edit', { focus: true });
+  });
+
+  summaryChangeButton?.addEventListener('click', () => {
+    if (previousDraft) {
+      restoreDraft(previousDraft);
+    } else if (initialDraft) {
+      restoreDraft(initialDraft);
+    }
+    currentBarcode = previousBarcode;
+    setSummaryCard(null);
+    clearLookupResults();
+    setBarcodeStatus('');
+    setAddFoodMode('discovery');
   });
 
   container.innerHTML = '';
@@ -2560,6 +2442,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   let perServing = { calories: 0, carbs: 0, protein: 0 };
   let typedName = '';
   let macroBasisLabel = 'Per 100 g';
+  let foodLocked = false;
 
   if (state.prefillFoodId) {
     const prefill = foods.find((f) => f.id === state.prefillFoodId);
@@ -2600,6 +2483,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       }
     }
   }
+  foodLocked = Boolean(selectedFood || (entryId && typedName.trim()));
 
   const updateTotals = () => {
     const calories = servings * perServing.calories;
@@ -2619,7 +2503,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   const renderFoodSuggestions = (term: string) => {
     const suggestionEl = entryForm.querySelector<HTMLDivElement>('#food-suggestions');
-    const selectedSummary = entryForm.querySelector<HTMLDivElement>('#selected-food-summary');
     if (!suggestionEl) return;
     const filtered = sortFoodsForPicker(foods, term);
     if (filtered.length === 0 && term.trim()) {
@@ -2629,7 +2512,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         e.stopPropagation();
         setView('add-food', { prefillName: term, returnDate: date });
       });
-      if (selectedSummary) selectedSummary.textContent = '';
       return;
     }
     suggestionEl.innerHTML = '<div class="food-suggestions"></div>';
@@ -2656,6 +2538,8 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       `;
       btn.addEventListener('click', () => {
         selectedFood = food;
+        foodLocked = true;
+        typedName = food.name;
         perServing = {
           calories: food.caloriesPerServing,
           carbs: food.carbsPerServing,
@@ -2665,8 +2549,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         useGramsInput = !hasTrueServing(food) && Boolean(servingSizeGrams);
         grams = useGramsInput ? null : grams;
         updateMacroBasisLabels(getEntryMacroBasisLabel(food));
-        const input = entryForm.querySelector<HTMLInputElement>('#food');
-        if (input) input.value = food.name;
+        const hiddenInput = entryForm.querySelector<HTMLInputElement>('#food');
+        if (hiddenInput) hiddenInput.value = food.name;
+        const selectedName = entryForm.querySelector<HTMLDivElement>('#selected-food-name');
+        if (selectedName) selectedName.textContent = food.name;
         const caloriesInput = entryForm.querySelector<HTMLInputElement>('#calories');
         const carbsInput = entryForm.querySelector<HTMLInputElement>('#carbs');
         const proteinInput = entryForm.querySelector<HTMLInputElement>('#protein');
@@ -2675,6 +2561,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         if (proteinInput) proteinInput.value = formatNumberSmart(food.proteinPerServing);
         renderFoodSuggestions(food.name);
         updateEntryInputMode(food);
+        setFoodSelectionState(true);
         if (!macroEditorWasToggled) {
           setMacroEditorOpen(false);
         }
@@ -2683,31 +2570,36 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       });
       list?.appendChild(btn);
     });
-    if (selectedSummary && selectedFood) {
-      selectedSummary.textContent = `Using saved macros for ${selectedFood.name}.`;
-    } else if (selectedSummary) {
-      selectedSummary.textContent = '';
-    }
   };
 
   entryForm.classList.add('form-grid--stack', 'entry-form');
   entryForm.innerHTML = `
     <div class="form-section">
       <div class="section-heading">
-        <p class="section-eyebrow">Step 1</p>
         <h3>Choose food</h3>
         <p class="small-text muted">Favorites show by default. Type to search your foods.</p>
       </div>
-      <div class="field-group">
-        <label for="food">Food</label>
-        <input id="food" name="food" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
-        <div id="selected-food-summary" class="small-text muted"></div>
-        <div id="food-suggestions"></div>
+      <div id="food-picker" class="${foodLocked ? 'is-hidden' : ''}">
+        <div class="field-group">
+          <label for="food-search">Food</label>
+          <input id="food-search" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
+          <div id="food-suggestions"></div>
+        </div>
       </div>
+      <div id="selected-food-card" class="selected-food-card ${foodLocked ? '' : 'is-hidden'}">
+        <div>
+          <p class="small-text">Selected food</p>
+          <div class="selected-food-card__name" id="selected-food-name">${selectedFood?.name ?? typedName}</div>
+        </div>
+        <div class="selected-food-card__actions">
+          <button type="button" class="ghost small-button" id="edit-selected-food">Edit food</button>
+          <button type="button" class="secondary small-button" id="change-selected-food">Change</button>
+        </div>
+      </div>
+      <input type="hidden" id="food" name="food" value="${typedName}" />
     </div>
-    <div class="form-section">
+    <div class="form-section ${foodLocked ? '' : 'is-hidden'}" id="entry-amount-section">
       <div class="section-heading">
-        <p class="section-eyebrow">Step 2</p>
         <h3 id="entry-amount-heading">Servings</h3>
       </div>
       <div class="responsive-row">
@@ -2727,7 +2619,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         <div id="grams-field" class="is-hidden">
           <label for="grams" id="grams-label">Grams eaten</label>
           <input id="grams" name="grams" type="text" inputmode="decimal" placeholder="e.g., 162" />
-          <p class="small-text muted" id="grams-help">Nutrition is per 100 g.</p>
         </div>
         <div class="totals-panel">
           <div id="entry-totals"></div>
@@ -2737,7 +2628,6 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     </div>
     <div id="macro-editor" class="form-section">
       <div class="section-heading">
-        <p class="section-eyebrow">Step 3</p>
         <h3 id="macro-basis-heading">Macros</h3>
         <p class="small-text muted" id="macro-basis-label"></p>
       </div>
@@ -2783,6 +2673,26 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     if (proteinLabel) proteinLabel.textContent = `Protein (g) ${basisSuffix}`;
   };
 
+  const setFoodSelectionState = (locked: boolean) => {
+    foodLocked = locked;
+    const picker = entryForm.querySelector<HTMLDivElement>('#food-picker');
+    const selectedCard = entryForm.querySelector<HTMLDivElement>('#selected-food-card');
+    const selectedName = entryForm.querySelector<HTMLDivElement>('#selected-food-name');
+    const amountSection = entryForm.querySelector<HTMLDivElement>('#entry-amount-section');
+    const toggleMacros = entryForm.querySelector<HTMLButtonElement>('#toggle-macros');
+    const hiddenInput = entryForm.querySelector<HTMLInputElement>('#food');
+    const editButton = entryForm.querySelector<HTMLButtonElement>('#edit-selected-food');
+    picker?.classList.toggle('is-hidden', locked);
+    selectedCard?.classList.toggle('is-hidden', !locked);
+    amountSection?.classList.toggle('is-hidden', !locked);
+    toggleMacros?.classList.toggle('is-hidden', !locked);
+    if (hiddenInput) hiddenInput.value = typedName;
+    if (selectedName) selectedName.textContent = typedName;
+    if (editButton) {
+      editButton.classList.toggle('is-hidden', !selectedFood?.id);
+    }
+  };
+
   const updateEntryInputMode = (food?: Food) => {
     servingSizeGrams = getServingSizeGramsValue(food);
     useGramsInput = Boolean(food && !hasTrueServing(food) && servingSizeGrams);
@@ -2791,16 +2701,12 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     const gramsField = entryForm.querySelector<HTMLDivElement>('#grams-field');
     const servingsHelp = entryForm.querySelector<HTMLParagraphElement>('#servings-help');
     const gramsLabel = entryForm.querySelector<HTMLLabelElement>('#grams-label');
-    const gramsHelp = entryForm.querySelector<HTMLParagraphElement>('#grams-help');
     if (headingEl) headingEl.textContent = useGramsInput ? 'Grams eaten' : 'Servings';
     if (servingsHelp) {
       servingsHelp.textContent = 'Enter servings eaten (minimum 0.01).';
     }
     if (gramsLabel) {
       gramsLabel.textContent = 'Grams eaten';
-    }
-    if (gramsHelp) {
-      gramsHelp.textContent = 'Nutrition is per 100 g.';
     }
     servingsField?.classList.toggle('is-hidden', useGramsInput);
     gramsField?.classList.toggle('is-hidden', !useGramsInput);
@@ -2824,6 +2730,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   renderFoodSuggestions(typedName);
   updateEntryInputMode(selectedFood);
+  setFoodSelectionState(foodLocked);
 
   const macroEditor = entryForm.querySelector<HTMLDivElement>('#macro-editor');
   const toggleMacrosBtn = entryForm.querySelector<HTMLButtonElement>('#toggle-macros');
@@ -2833,7 +2740,8 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   const setMacroEditorOpen = (open: boolean, userToggle = false) => {
     macroEditorOpen = open;
     if (userToggle) macroEditorWasToggled = true;
-    macroEditor?.classList.toggle('is-hidden', !open);
+    const shouldShow = foodLocked && open;
+    macroEditor?.classList.toggle('is-hidden', !shouldShow);
     if (toggleMacrosBtn) {
       toggleMacrosBtn.textContent = open ? 'Hide macros' : 'Edit macros';
     }
@@ -2843,6 +2751,26 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
 
   toggleMacrosBtn?.addEventListener('click', () => {
     setMacroEditorOpen(!macroEditorOpen, true);
+  });
+
+  entryForm.querySelector<HTMLButtonElement>('#change-selected-food')?.addEventListener('click', () => {
+    selectedFood = undefined;
+    typedName = '';
+    grams = null;
+    updateMacroBasisLabels('Per 100 g');
+    updateEntryInputMode(undefined);
+    renderFoodSuggestions('');
+    setFoodSelectionState(false);
+    const input = entryForm.querySelector<HTMLInputElement>('#food-search');
+    if (input) {
+      input.value = '';
+      input.focus();
+    }
+  });
+
+  entryForm.querySelector<HTMLButtonElement>('#edit-selected-food')?.addEventListener('click', () => {
+    if (!selectedFood?.id) return;
+    setView('add-food', { foodId: selectedFood.id, returnDate: date });
   });
 
   const attachDecimalInput = (
@@ -2920,12 +2848,13 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     }, 50);
   }
 
-  entryForm.querySelector<HTMLInputElement>('#food')?.addEventListener('input', (e) => {
+  entryForm.querySelector<HTMLInputElement>('#food-search')?.addEventListener('input', (e) => {
     typedName = (e.target as HTMLInputElement).value;
     selectedFood = undefined;
     grams = null;
     updateMacroBasisLabels('Per 100 g');
     updateEntryInputMode(undefined);
+    setFoodSelectionState(false);
     renderFoodSuggestions(typedName);
     if (!macroEditorWasToggled) {
       setMacroEditorOpen(true);

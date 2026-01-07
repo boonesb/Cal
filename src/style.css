@@ -212,7 +212,7 @@ label {
 .fab-add-entry {
   position: fixed;
   right: 1rem;
-  bottom: calc(1rem + env(safe-area-inset-bottom));
+  bottom: calc(4.5rem + env(safe-area-inset-bottom));
   z-index: 10;
   display: none;
   align-items: center;
@@ -222,6 +222,11 @@ label {
   background: var(--color-primary);
   color: #fff;
   box-shadow: 0 14px 26px rgba(15, 118, 110, 0.3);
+}
+
+.fab-add-entry:hover,
+.fab-add-entry:focus-visible {
+  background: #0f766e;
 }
 
 .primary-cta {
@@ -622,12 +627,12 @@ label {
 }
 
 .lookup-results .usda-result__title {
-  color: #0f172a;
-  font-weight: 600;
+  color: #0b1120;
+  font-weight: 700;
 }
 
 .lookup-results .usda-result .small-text {
-  color: #334155;
+  color: #475569;
 }
 
 .usda-result__header {
@@ -656,6 +661,12 @@ label {
   background: #e0f2fe;
   color: #075985;
   border: 1px solid #bae6fd;
+}
+
+.badge--branded {
+  background: #ccfbf1;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
 }
 
 .food-option {
@@ -892,11 +903,75 @@ input[aria-invalid='true'] {
   padding: 0.25rem;
   display: grid;
   gap: 0.35rem;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
-.form-grid.review-mode .find-section .section-heading,
-.form-grid.review-mode .find-actions {
+.add-food-form.add-food--discovery .summary-section,
+.add-food-form.add-food--discovery .manual-section,
+.add-food-form.add-food--summary .find-section,
+.add-food-form.add-food--summary .manual-section,
+.add-food-form.add-food--edit .find-section,
+.add-food-form.add-food--edit .summary-section {
   display: none;
+}
+
+.find-actions-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.summary-card {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 0.9rem;
+  display: grid;
+  gap: 0.6rem;
+  background: #fff;
+}
+
+.summary-card__title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.summary-card__meta {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+.summary-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.selected-food-card {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  background: #f8fafc;
+}
+
+.selected-food-card__name {
+  font-weight: 700;
+  color: var(--color-ink);
+}
+
+.selected-food-card__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
 }
 
 .usda-modal__section {
