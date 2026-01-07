@@ -351,6 +351,60 @@ label {
   width: 100%;
 }
 
+.total-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.total-card__label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.75rem;
+}
+
+.hero-metrics--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.hero-metric {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.hero-metric-label {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.hero-metric-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.hero-metric-unit {
+  font-size: 0.85rem;
+  color: var(--color-muted);
+}
+
+.hero-metrics--compact .hero-metric-value {
+  font-size: 1.1rem;
+}
+
 .water-card {
   display: grid;
   gap: 0.75rem;
@@ -365,11 +419,6 @@ label {
 
 .water-card__header h3 {
   margin: 0;
-}
-
-.water-card__total {
-  font-size: 1.2rem;
-  font-weight: 700;
 }
 
 .water-card__actions {
@@ -620,6 +669,7 @@ label {
   background: #fff;
   padding: 0.6rem 0.75rem;
   border-radius: 10px;
+  min-width: 0;
 }
 
 .lookup-results .usda-result {
@@ -635,22 +685,34 @@ label {
   color: #475569;
 }
 
-.usda-result__header {
+.usda-result__title-row {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.4rem;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
 }
 
 .usda-result__title {
   font-weight: 700;
+  min-width: 0;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.usda-result__badge {
+  flex: 0 0 auto;
 }
 
 .usda-result__meta {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  flex-wrap: wrap;
+  font-size: 0.85rem;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .lookup-results .usda-result:hover {

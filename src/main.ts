@@ -21,7 +21,7 @@ import {
   User,
 } from 'firebase/auth';
 import { auth, db } from './firebase';
-import { APP_VERSION, BUILD_TIME_ISO } from './generated/version';
+import { BUILD_TIME_ISO } from './generated/version';
 import { BrowserMultiFormatReader, IScannerControls } from '@zxing/browser';
 
 const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
@@ -99,6 +99,18 @@ type WaterLog = {
 
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 const BUILD_TIMESTAMP = import.meta.env.BUILD_TIMESTAMP ?? BUILD_TIME_ISO;
+const formatBuildTimestamp = (value: string) => {
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}`;
+  }
+  return value.replace('T', ' ').slice(0, 16);
+};
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
 
@@ -116,6 +128,9 @@ const state: {
   returnToEntryAfterFoodSave: boolean;
   isMobile: boolean;
   lastWaterMl?: number;
+  usdaSearchTerm: string;
+  usdaSearchResults: UsdaFoodResult[];
+  usdaSearchHasSearched: boolean;
 } = {
   user: null,
   selectedDate: todayStr(),
@@ -129,6 +144,9 @@ const state: {
   returnToEntryAfterFoodSave: false,
   isMobile: window.matchMedia('(max-width: 640px)').matches,
   lastWaterMl: undefined,
+  usdaSearchTerm: '',
+  usdaSearchResults: [],
+  usdaSearchHasSearched: false,
 };
 
 const resetInactivityTimer = () => {
@@ -285,6 +303,36 @@ const renderMacroSummary = (options: {
       ${label ? `<div class="macro-summary__label">${label}</div>` : ''}
       <div class="macro-summary__primary">${caloriesText}</div>
       <div class="macro-summary__secondary">${carbsText} • ${proteinText}</div>
+    </div>
+  `;
+};
+
+const renderHeroMetrics = (options: {
+  calories: number;
+  carbs: number;
+  protein: number;
+  className?: string;
+}) => {
+  const { calories, carbs, protein, className } = options;
+  const classes = ['hero-metrics'];
+  if (className) classes.push(className);
+  return `
+    <div class="${classes.join(' ')}">
+      <div class="hero-metric">
+        <div class="hero-metric-label">Calories</div>
+        <div class="hero-metric-value">${formatNumberSmart(calories)}</div>
+        <div class="hero-metric-unit">kcal</div>
+      </div>
+      <div class="hero-metric">
+        <div class="hero-metric-label">Carbs</div>
+        <div class="hero-metric-value">${formatNumberSmart(carbs)}</div>
+        <div class="hero-metric-unit">g</div>
+      </div>
+      <div class="hero-metric">
+        <div class="hero-metric-label">Protein</div>
+        <div class="hero-metric-value">${formatNumberSmart(protein)}</div>
+        <div class="hero-metric-unit">g</div>
+      </div>
     </div>
   `;
 };
@@ -500,9 +548,6 @@ const getManualNutritionBasisLabel = (grams?: number) => {
   }
   return 'Per serving (grams)';
 };
-
-const getManualReferenceLabel = (anchor: ServingAnchor | null) =>
-  anchor ? `Per serving (${anchor.label})` : 'Based on USDA standard: 100 g';
 
 const getFoodBasis = (food: Pick<Food, 'servingSize' | 'servingSizeUnit' | 'servingSizeGrams'>) => {
   const anchor = resolveServingAnchor({
@@ -739,8 +784,7 @@ const setAppContent = (html: string) => {
 const renderFooter = () => {
   const footer = document.createElement('footer');
   footer.className = 'app-footer';
-  const displayVersion = APP_VERSION.replace(/-dirty\b/, '');
-  footer.textContent = `v ${displayVersion} · ${BUILD_TIMESTAMP}`;
+  footer.textContent = formatBuildTimestamp(BUILD_TIMESTAMP);
   return footer;
 };
 
@@ -1283,20 +1327,26 @@ const renderTotals = (entries: Entry[], waterLogs: WaterLog[], date: string) => 
   return `
     <div class="totals">
       <div class="total-card total-card--hero">
-        ${renderMacroSummary({
+        <div class="total-card__header">
+          <div class="total-card__label">Daily totals</div>
+        </div>
+        ${renderHeroMetrics({
           calories: totals.calories,
           carbs: totals.carbs,
           protein: totals.protein,
-          label: 'Daily totals',
-          variant: 'hero',
         })}
       </div>
       <div class="total-card water-card" id="water-card">
         <div class="water-card__header">
-          <h3>Water</h3>
+          <span class="hero-metric-label">Water</span>
           <button id="undo-water" class="ghost" ${canUndoWater ? '' : 'disabled'}>Undo</button>
         </div>
-        <div class="water-card__total" id="water-total">${totalWaterOz} oz today</div>
+        <div class="hero-metrics hero-metrics--single">
+          <div class="hero-metric">
+            <div class="hero-metric-value" id="water-total">${totalWaterOz}</div>
+            <div class="hero-metric-unit">oz today</div>
+          </div>
+        </div>
         <div class="water-card__actions">
           <button id="add-water">+ Add water</button>
           <button id="water-chooser" class="secondary icon-button" aria-label="Choose water amount">▾</button>
@@ -1394,7 +1444,7 @@ const renderDashboard = async (dateOverride?: string) => {
     const totalWaterOz = mlToOz(totalWaterMl);
     const totalEl = totalsEl.querySelector<HTMLDivElement>('#water-total');
     if (totalEl) {
-      totalEl.textContent = `${totalWaterOz} oz today`;
+      totalEl.textContent = `${totalWaterOz}`;
     }
     const undoButton = totalsEl.querySelector<HTMLButtonElement>('#undo-water');
     if (undoButton) {
@@ -1569,7 +1619,6 @@ const renderFoodForm = (options: {
             </div>
           </div>
           <div id="lookup-error" class="error-text"></div>
-          <div id="lookup-results" class="lookup-results lookup-results--collapsed" aria-live="polite"></div>
         </div>
         ${
           scanSupported
@@ -1606,7 +1655,6 @@ const renderFoodForm = (options: {
       <div class="summary-actions">
         <button type="submit" id="summary-save">Save food</button>
         <button type="button" class="secondary" id="summary-edit">Edit values</button>
-        <button type="button" class="ghost" id="summary-change">Change selection</button>
       </div>
     </div>
     <div class="form-section manual-section">
@@ -1710,7 +1758,7 @@ const renderFoodForm = (options: {
   const proteinLabelEl = form.querySelector<HTMLLabelElement>('#protein-label');
   const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
   const scanBtn = form.querySelector<HTMLButtonElement>('#scan-barcode');
-  const lookupResults = form.querySelector<HTMLDivElement>('#lookup-results');
+  const lookupCard = form.querySelector<HTMLDivElement>('#lookup-card');
   const lookupError = form.querySelector<HTMLDivElement>('#lookup-error');
   const barcodeStatus = form.querySelector<HTMLDivElement>('#barcode-status');
   const enterManualButton = form.querySelector<HTMLButtonElement>('#enter-manual');
@@ -1719,7 +1767,7 @@ const renderFoodForm = (options: {
   const summaryMacros = form.querySelector<HTMLDivElement>('#summary-macros');
   const summaryBranded = form.querySelector<HTMLSpanElement>('#summary-branded');
   const summaryEditButton = form.querySelector<HTMLButtonElement>('#summary-edit');
-  const summaryChangeButton = form.querySelector<HTMLButtonElement>('#summary-change');
+  let lookupResults: HTMLDivElement | null = null;
 
   const updateServingContext = (draft?: Partial<FoodDraft>) => {
     if (draft && 'servingLabel' in draft) servingLabel = draft.servingLabel;
@@ -1755,16 +1803,23 @@ const renderFoodForm = (options: {
   updateServingContext({ servingLabel, servingSize, servingSizeUnit, servingSizeGrams });
   updateFoodFormBasisLabels();
 
-  const setLookupCollapsed = (collapsed: boolean) => {
-    lookupResults?.classList.toggle('lookup-results--collapsed', collapsed);
+  const ensureLookupResults = () => {
+    if (lookupResults) return lookupResults;
+    if (!lookupCard) return null;
+    const results = document.createElement('div');
+    results.id = 'lookup-results';
+    results.className = 'lookup-results';
+    results.setAttribute('aria-live', 'polite');
+    lookupCard.appendChild(results);
+    lookupResults = results;
+    return results;
   };
 
-  const clearLookupResults = () => {
-    if (lookupResults) lookupResults.innerHTML = '';
-    setLookupCollapsed(true);
+  const removeLookupResults = () => {
+    if (!lookupResults) return;
+    lookupResults.remove();
+    lookupResults = null;
   };
-
-  setLookupCollapsed(true);
 
   const setBarcodeStatus = (message: string) => {
     if (barcodeStatus) barcodeStatus.textContent = message;
@@ -1803,11 +1858,11 @@ const renderFoodForm = (options: {
     }
     summaryName.textContent = draft.name;
     summaryBasis.textContent = getSummaryBasisLabel(draft);
-    summaryMacros.innerHTML = renderMacroSummary({
+    summaryMacros.innerHTML = renderHeroMetrics({
       calories: draft.caloriesPerServing,
       carbs: draft.carbsPerServing,
       protein: draft.proteinPerServing,
-      variant: 'compact',
+      className: 'hero-metrics--compact',
     });
     summaryBranded.classList.toggle('is-hidden', !appliedSummary?.isBranded);
   };
@@ -1889,7 +1944,7 @@ const renderFoodForm = (options: {
     previousBarcode = currentBarcode;
     restoreDraft(draft);
     setSummaryCard(draft, { isBranded: meta?.isBranded });
-    clearLookupResults();
+    removeLookupResults();
     setAddFoodMode('summary');
   };
 
@@ -1928,7 +1983,7 @@ const renderFoodForm = (options: {
         : ''
     );
     setSummaryCard(draft, { isBranded: summary.isBranded });
-    clearLookupResults();
+    removeLookupResults();
     setAddFoodMode('summary');
   };
 
@@ -2125,9 +2180,13 @@ const renderFoodForm = (options: {
   attachSelectAllOnFocus(proteinInput);
 
   const renderLookupResults = (results: UsdaFoodResult[]) => {
-    if (!lookupResults) return;
-    lookupResults.innerHTML = '';
-    setLookupCollapsed(false);
+    const resultsEl = ensureLookupResults();
+    if (!resultsEl) return;
+    resultsEl.innerHTML = '';
+    if (!results.length) {
+      resultsEl.innerHTML = '<div class="small-text muted lookup-empty">No results found.</div>';
+      return;
+    }
     results.forEach((result) => {
       const anchor = resolveServingAnchor({
         servingSize: result.servingSize,
@@ -2139,39 +2198,47 @@ const renderFoodForm = (options: {
       const carbs = result.carbs == null ? null : result.carbs * servingFactor;
       const protein = result.protein == null ? null : result.protein * servingFactor;
       const servingLabel = formatUsdaServing(result);
+      const metaParts = [
+        result.brandOwner,
+        result.dataType,
+        servingLabel ? `Serving: ${servingLabel}` : null,
+        `${formatUsdaValue(calories, 'kcal')} kcal`,
+        `${formatUsdaValue(carbs, 'g')} carbs`,
+        `${formatUsdaValue(protein, 'g')} protein`,
+      ].filter(Boolean) as string[];
+      const metaLine = metaParts.join(' • ');
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'usda-result';
       btn.innerHTML = `
-        <div class="usda-result__header">
+        <div class="usda-result__title-row">
           <div class="usda-result__title">${result.description}</div>
-          ${isBranded ? `<span class="badge badge--branded">Branded</span>` : ''}
+          ${isBranded ? `<span class="badge badge--branded usda-result__badge">Branded</span>` : ''}
         </div>
-        ${result.brandOwner ? `<div class="small-text muted">${result.brandOwner}</div>` : ''}
-        ${servingLabel ? `<div class="small-text">Serving: ${servingLabel}</div>` : ''}
-        <div class="small-text">${getManualReferenceLabel(anchor)}: ${formatUsdaValue(
-        calories,
-        'kcal'
-      )} • ${formatUsdaValue(carbs, 'g')} carbs • ${formatUsdaValue(protein, 'g')} protein</div>`;
+        <div class="usda-result__meta">${metaLine}</div>`;
       btn.addEventListener('click', async () => {
         const draft = createUsdaDraftFromResult(result);
         const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
         if (!confirmed) return;
         applyDraftFromLookup(draft, { isBranded });
-        if (lookupInput) lookupInput.value = result.description;
         setBarcodeStatus('');
       });
-      lookupResults.appendChild(btn);
+      resultsEl.appendChild(btn);
     });
-    lookupResults.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  const restoreUsdaSearchState = () => {
+    if (!lookupInput || !state.usdaSearchHasSearched) return;
+    lookupInput.value = state.usdaSearchTerm;
+    renderLookupResults(state.usdaSearchResults);
   };
 
   lookupBtn?.addEventListener('click', async () => {
-    if (!lookupInput || !lookupError || !lookupResults || !lookupBtn) return;
+    if (!lookupInput || !lookupError || !lookupBtn) return;
     const term = lookupInput.value.trim();
     lookupError.textContent = '';
-    lookupResults.innerHTML = '';
-    setLookupCollapsed(false);
+    removeLookupResults();
     if (!term) {
       lookupError.textContent = 'Enter a food name to search.';
       return;
@@ -2185,10 +2252,9 @@ const renderFoodForm = (options: {
     lookupBtn.textContent = 'Looking up...';
     try {
       const results = await searchUsdaFoods(term);
-      if (!results.length) {
-        lookupError.textContent = 'No matches found.';
-        return;
-      }
+      state.usdaSearchTerm = term;
+      state.usdaSearchResults = results;
+      state.usdaSearchHasSearched = true;
       renderLookupResults(results);
     } catch (err: any) {
       lookupError.textContent = err?.message ?? 'Lookup failed. Try again later.';
@@ -2218,26 +2284,34 @@ const renderFoodForm = (options: {
     setAddFoodMode('edit', { focus: true });
   });
 
-  summaryChangeButton?.addEventListener('click', () => {
-    if (previousDraft) {
-      restoreDraft(previousDraft);
-    } else if (initialDraft) {
-      restoreDraft(initialDraft);
+  const handleBack = () => {
+    if (state.usdaSearchHasSearched && addFoodMode !== 'discovery') {
+      if (previousDraft) {
+        restoreDraft(previousDraft);
+      } else if (initialDraft) {
+        restoreDraft(initialDraft);
+      }
+      currentBarcode = previousBarcode;
+      setSummaryCard(null);
+      setBarcodeStatus('');
+      setAddFoodMode('discovery');
+      restoreUsdaSearchState();
+      return true;
     }
-    currentBarcode = previousBarcode;
-    setSummaryCard(null);
-    clearLookupResults();
-    setBarcodeStatus('');
-    setAddFoodMode('discovery');
-  });
+    return false;
+  };
 
   container.innerHTML = '';
   container.appendChild(form);
+  return { handleBack };
 };
 
 const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: string; foodId?: string }) => {
   applyViewState('add-food', { returnDate: options?.returnDate });
   state.pendingEntryFoodName = options?.prefillName;
+  state.usdaSearchTerm = '';
+  state.usdaSearchResults = [];
+  state.usdaSearchHasSearched = false;
   if (!state.entryFormFoodCacheLoaded) {
     await getUserFoods();
   }
@@ -2270,12 +2344,12 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
     setView('foods');
   };
 
-  container.querySelector('#back-from-food')?.addEventListener('click', goBack);
+  const backButton = container.querySelector('#back-from-food');
 
   const host = container.querySelector<HTMLDivElement>('#add-food-form');
   if (!host) return;
 
-  renderFoodForm({
+  const { handleBack } = renderFoodForm({
     container: host,
     prefillName: options?.prefillName ?? state.pendingEntryFoodName,
     food: editingFood,
@@ -2295,6 +2369,11 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
       }
     },
   });
+
+  backButton?.addEventListener('click', () => {
+    if (handleBack()) return;
+    goBack();
+  });
 };
 
 const renderFoods = async () => {
@@ -2304,8 +2383,7 @@ const renderFoods = async () => {
     <section class="card stack-card">
       <div class="compact-header">
         <div>
-          <p class="small-text">Saved foods</p>
-          <h2>Foods</h2>
+          <h2>Favorite Foods</h2>
         </div>
         <button id="create-food">Add food</button>
       </div>
@@ -2357,8 +2435,8 @@ const renderFoods = async () => {
         .join('');
 
     listEl.innerHTML = `
-      ${favorites.length ? `<div class="list-section"><h3>Favorites</h3>${renderCards(favorites)}</div>` : ''}
-      ${others.length ? `<div class="list-section"><h3>All foods</h3>${renderCards(others)}</div>` : ''}
+      ${favorites.length ? `<div class="list-section">${renderCards(favorites)}</div>` : ''}
+      ${others.length ? `<div class="list-section"><h3>All Foods</h3>${renderCards(others)}</div>` : ''}
     `;
   };
 
