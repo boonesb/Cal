@@ -863,6 +863,35 @@ input[aria-invalid='true'] {
   gap: 0.35rem;
 }
 
+.scan-summary {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.5rem;
+  background: #f8fafc;
+}
+
+.scan-summary__header {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.scan-summary__eyebrow {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #0f172a;
+  margin: 0;
+}
+
+.scan-summary__details {
+  display: grid;
+  gap: 0.35rem;
+}
+
 .autofill-status {
   display: flex;
   align-items: center;
