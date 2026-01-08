@@ -2267,32 +2267,21 @@ const renderFoodForm = (options: {
       if (dataType) return `${dataType} food`;
       return 'Food';
     };
-    const getUsdaSubtitle = (result: UsdaFoodResult) => {
-      const servingGrams = getUsdaServingGrams(result);
-      const caloriesPer100g = Number.isFinite(result.calories) ? result.calories : null;
-      const labelCalories = Number.isFinite(result.labelCalories) ? result.labelCalories : null;
-      const segments: string[] = [];
-      if (servingGrams) {
-        segments.push(`Per serving: ${formatNumberSmart(servingGrams)} g`);
-      }
-      if (servingGrams) {
-        let perServingCalories = labelCalories;
-        if (perServingCalories == null && caloriesPer100g != null) {
-          perServingCalories = caloriesPer100g * (servingGrams / 100);
-        }
-        if (perServingCalories != null && Number.isFinite(perServingCalories)) {
-          segments.push(`${formatNumberSmart(perServingCalories)} kcal`);
-        }
-      } else if (caloriesPer100g != null && Number.isFinite(caloriesPer100g)) {
-        segments.push(`${formatNumberSmart(caloriesPer100g)} kcal per 100 g`);
-      }
-      return segments.join(' • ');
+    const formatMacroValue = (value: number | null | undefined) =>
+      Number.isFinite(value) ? formatNumberSmart(value) : '—';
+    const getUsdaMacrosLine = (result: UsdaFoodResult) => {
+      const calories =
+        Number.isFinite(result.labelCalories) && result.labelCalories != null
+          ? result.labelCalories
+          : result.calories;
+      const protein = result.protein;
+      const carbs = result.carbs;
+      return `${formatMacroValue(calories)} kcal • ${formatMacroValue(protein)}g protein • ${formatMacroValue(carbs)}g carbs`;
     };
     results.forEach((result) => {
       const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const metaLine = getUsdaSubtitle(result);
       const title = getUsdaTitle(result);
-      const metaMarkup = metaLine ? `<div class="usda-result__meta">${metaLine}</div>` : '';
+      const macrosLine = getUsdaMacrosLine(result);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'usda-result';
@@ -2301,7 +2290,7 @@ const renderFoodForm = (options: {
           <div class="usda-result__title">${title}</div>
           ${isBranded ? `<span class="badge badge--branded usda-result__badge">Branded</span>` : ''}
         </div>
-        ${metaMarkup}`;
+        <div class="usda-result__macros">${macrosLine}</div>`;
       btn.addEventListener('click', async () => {
         const draft = createUsdaDraftFromResult(result);
         draft.name = title;

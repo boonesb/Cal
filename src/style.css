@@ -796,6 +796,13 @@ label {
   min-width: 0;
 }
 
+.usda-result__macros {
+  font-size: 0.85rem;
+  color: #64748b;
+  line-height: 1.4;
+  white-space: normal;
+}
+
 .lookup-results .usda-result:hover {
   background: #f1f5f9;
 }
