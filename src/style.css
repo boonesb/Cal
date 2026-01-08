@@ -806,6 +806,11 @@ label {
   color: #64748b;
   line-height: 1.4;
   white-space: normal;
+  font-variant: normal;
+  font-variant-caps: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: inherit;
 }
 
 @media (max-width: 480px) {

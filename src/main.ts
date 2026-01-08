@@ -2152,19 +2152,48 @@ const renderFoodForm = (options: {
   const isFiniteNumber = (value: number | null | undefined) =>
     typeof value === 'number' && Number.isFinite(value);
 
+  const formatUsdaMacroValue = (value: number | null | undefined) =>
+    isFiniteNumber(value) ? formatNumberSmart(value) : '—';
+
   const getUsdaMacrosLine = (result: UsdaFoodResult) => {
     const calories = result.labelCalories ?? result.calories;
-    const segments: string[] = [];
-    if (isFiniteNumber(calories)) {
-      segments.push(`${formatNumberSmart(calories)} kcal`);
+    const caloriesValue = formatUsdaMacroValue(calories);
+    const proteinValue = formatUsdaMacroValue(result.protein);
+    const carbsValue = formatUsdaMacroValue(result.carbs);
+    return `${caloriesValue} kcal • ${proteinValue} g protein • ${carbsValue} g carbs`;
+  };
+
+  const createUsdaResultRow = (result: UsdaFoodResult, query?: string) => {
+    const isBranded = result.dataType?.toLowerCase() === 'branded';
+    const title = getUsdaDisplayName(result, query);
+    const macrosLine = getUsdaMacrosLine(result);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'usda-result';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'usda-result__title-row';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'usda-result__title';
+    titleEl.textContent = title;
+    titleRow.appendChild(titleEl);
+
+    if (isBranded) {
+      const badge = document.createElement('span');
+      badge.className = 'badge badge--branded usda-result__badge';
+      badge.textContent = 'Branded';
+      titleRow.appendChild(badge);
     }
-    if (isFiniteNumber(result.protein)) {
-      segments.push(`${formatNumberSmart(result.protein)} g protein`);
-    }
-    if (isFiniteNumber(result.carbs)) {
-      segments.push(`${formatNumberSmart(result.carbs)} g carbs`);
-    }
-    return segments.join(' · ');
+
+    const macrosEl = document.createElement('div');
+    macrosEl.className = 'usda-result__macros';
+    macrosEl.textContent = macrosLine;
+
+    btn.appendChild(titleRow);
+    btn.appendChild(macrosEl);
+
+    return { btn, isBranded };
   };
 
   const lookupBarcode = async (barcode: string): Promise<BarcodeLookupResult> => {
@@ -2289,18 +2318,7 @@ const renderFoodForm = (options: {
       return;
     }
     results.forEach((result) => {
-      const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const title = getUsdaDisplayName(result, state.usdaSearchTerm);
-      const macrosLine = getUsdaMacrosLine(result);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'usda-result';
-      btn.innerHTML = `
-        <div class="usda-result__title-row">
-          <div class="usda-result__title">${title}</div>
-          ${isBranded ? `<span class="badge badge--branded usda-result__badge">Branded</span>` : ''}
-        </div>
-        <div class="usda-result__macros">${macrosLine}</div>`;
+      const { btn, isBranded } = createUsdaResultRow(result, state.usdaSearchTerm);
       btn.addEventListener('click', async () => {
         const draft = createUsdaDraftFromResult(result, state.usdaSearchTerm);
         const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
