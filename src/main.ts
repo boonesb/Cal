@@ -2270,10 +2270,7 @@ const renderFoodForm = (options: {
     const formatMacroValue = (value: number | null | undefined) =>
       Number.isFinite(value) ? formatNumberSmart(value) : '—';
     const getUsdaMacrosLine = (result: UsdaFoodResult) => {
-      const calories =
-        Number.isFinite(result.labelCalories) && result.labelCalories != null
-          ? result.labelCalories
-          : result.calories;
+      const calories = result.labelCalories ?? result.calories;
       const protein = result.protein;
       const carbs = result.carbs;
       return `${formatMacroValue(calories)} kcal • ${formatMacroValue(protein)}g protein • ${formatMacroValue(carbs)}g carbs`;
