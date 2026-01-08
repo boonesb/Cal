@@ -664,6 +664,11 @@ label {
   flex-wrap: nowrap;
 }
 
+.date-row .icon-button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
 .date-display {
   background: #fff;
   border: 1px solid var(--color-border);
@@ -812,6 +817,9 @@ label {
 
   .usda-result__title {
     width: 100%;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .usda-result__badge {
@@ -819,6 +827,12 @@ label {
     font-size: 0.7rem;
     padding: 0.1rem 0.4rem;
     border-radius: 6px;
+  }
+
+  .usda-result__meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
   }
 
   .usda-result__macros {
