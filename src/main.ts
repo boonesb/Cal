@@ -1426,11 +1426,11 @@ const renderDashboard = async (dateOverride?: string) => {
       <div class="dashboard-header">
         <h2>Daily dashboard</h2>
         <div class="date-row">
-          <button id="prev-day" class="ghost icon-button" aria-label="Previous day">‹</button>
+          <button id="prev-day" class="ghost icon-button date-arrow" aria-label="Previous day">‹</button>
           <button id="date-display" class="date-display" type="button" aria-label="Select date">
             <span class="date-value">${formatDisplayDate(state.selectedDate)}</span>
           </button>
-          <button id="next-day" class="ghost icon-button" aria-label="Next day">›</button>
+          <button id="next-day" class="ghost icon-button date-arrow" aria-label="Next day">›</button>
           <input type="date" id="date-picker" class="visually-hidden" value="${state.selectedDate}" />
         </div>
       </div>
@@ -1973,7 +1973,7 @@ const renderFoodForm = (options: {
     });
   };
 
-  const createUsdaDraftFromResult = (result: UsdaFoodResult): FoodDraft => {
+  const createUsdaDraftFromResult = (result: UsdaFoodResult, query?: string): FoodDraft => {
     const anchor = resolveServingAnchor({
       servingSize: result.servingSize,
       servingSizeUnit: result.servingSizeUnit,
@@ -1983,7 +1983,7 @@ const renderFoodForm = (options: {
     const carbs = result.carbs == null ? 0 : roundTo1(result.carbs * servingFactor);
     const protein = result.protein == null ? 0 : roundTo1(result.protein * servingFactor);
     return {
-      name: result.description,
+      name: getUsdaDisplayName(result, query),
       caloriesPerServing: calories,
       carbsPerServing: carbs,
       proteinPerServing: protein,
@@ -2121,6 +2121,52 @@ const renderFoodForm = (options: {
     return `${formatNumberSmart(result.servingSize)} ${result.servingSizeUnit}`;
   };
 
+  const normalizeUsdaText = (value?: string | null) => (value ?? '').trim();
+
+  const getUsdaDisplayName = (result: UsdaFoodResult, query?: string) => {
+    const description = normalizeUsdaText(result.description);
+    const brandName = normalizeUsdaText(result.brandName);
+    const brandOwner = normalizeUsdaText(result.brandOwner);
+    const foodCategory = normalizeUsdaText(result.brandedFoodCategory ?? result.foodCategory);
+    const dataType = normalizeUsdaText(result.dataType);
+    const isBranded = result.dataType?.toLowerCase() === 'branded';
+    const normalizedQuery = normalizeUsdaText(query).toLowerCase();
+    const isQueryMatch = (value: string) =>
+      Boolean(normalizedQuery) && value.toLowerCase() === normalizedQuery;
+    const hasAlternative = Boolean(brandName || brandOwner || foodCategory);
+    if (description && (!isQueryMatch(description) || !hasAlternative)) {
+      return description;
+    }
+    if (isBranded && description) {
+      if (brandName) return `${brandName} ${description}`.trim();
+      if (brandOwner) return `${brandOwner} ${description}`.trim();
+    }
+    if (brandName) return brandName;
+    if (brandOwner) return brandOwner;
+    if (foodCategory) return foodCategory;
+    if (description) return description;
+    if (dataType) return `${dataType} food`;
+    return 'Food';
+  };
+
+  const isFiniteNumber = (value: number | null | undefined) =>
+    typeof value === 'number' && Number.isFinite(value);
+
+  const getUsdaMacrosLine = (result: UsdaFoodResult) => {
+    const calories = result.labelCalories ?? result.calories;
+    const segments: string[] = [];
+    if (isFiniteNumber(calories)) {
+      segments.push(`${formatNumberSmart(calories)} kcal`);
+    }
+    if (isFiniteNumber(result.protein)) {
+      segments.push(`${formatNumberSmart(result.protein)} g protein`);
+    }
+    if (isFiniteNumber(result.carbs)) {
+      segments.push(`${formatNumberSmart(result.carbs)} g carbs`);
+    }
+    return segments.join(' · ');
+  };
+
   const lookupBarcode = async (barcode: string): Promise<BarcodeLookupResult> => {
     if (!state.entryFormFoodCacheLoaded) {
       await getUserFoods();
@@ -2242,42 +2288,9 @@ const renderFoodForm = (options: {
       resultsEl.innerHTML = '<div class="small-text muted lookup-empty">No results found.</div>';
       return;
     }
-    const normalizeText = (value?: string | null) => (value ?? '').trim();
-    const query = normalizeText(state.usdaSearchTerm).toLowerCase();
-    const isQueryMatch = (value: string) => Boolean(value) && value.toLowerCase() === query;
-    const getUsdaTitle = (result: UsdaFoodResult) => {
-      const description = normalizeText(result.description);
-      const brandName = normalizeText(result.brandName);
-      const brandOwner = normalizeText(result.brandOwner);
-      const foodCategory = normalizeText(result.brandedFoodCategory ?? result.foodCategory);
-      const dataType = normalizeText(result.dataType);
-      const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const hasAlternative = Boolean(brandName || brandOwner || foodCategory);
-      if (description && (!isQueryMatch(description) || !hasAlternative)) {
-        return description;
-      }
-      if (isBranded && description) {
-        if (brandName) return `${brandName} ${description}`.trim();
-        if (brandOwner) return `${brandOwner} ${description}`.trim();
-      }
-      if (brandName) return brandName;
-      if (brandOwner) return brandOwner;
-      if (foodCategory) return foodCategory;
-      if (description) return description;
-      if (dataType) return `${dataType} food`;
-      return 'Food';
-    };
-    const formatMacroValue = (value: number | null | undefined) =>
-      Number.isFinite(value) ? formatNumberSmart(value) : '—';
-    const getUsdaMacrosLine = (result: UsdaFoodResult) => {
-      const calories = result.labelCalories ?? result.calories;
-      const protein = result.protein;
-      const carbs = result.carbs;
-      return `${formatMacroValue(calories)} kcal • ${formatMacroValue(protein)}g protein • ${formatMacroValue(carbs)}g carbs`;
-    };
     results.forEach((result) => {
       const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const title = getUsdaTitle(result);
+      const title = getUsdaDisplayName(result, state.usdaSearchTerm);
       const macrosLine = getUsdaMacrosLine(result);
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -2289,8 +2302,7 @@ const renderFoodForm = (options: {
         </div>
         <div class="usda-result__macros">${macrosLine}</div>`;
       btn.addEventListener('click', async () => {
-        const draft = createUsdaDraftFromResult(result);
-        draft.name = title;
+        const draft = createUsdaDraftFromResult(result, state.usdaSearchTerm);
         const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
         if (!confirmed) return;
         applyDraftFromLookup(draft, { isBranded });
