@@ -803,6 +803,33 @@ label {
   white-space: normal;
 }
 
+@media (max-width: 480px) {
+  .usda-result__title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .usda-result__title {
+    width: 100%;
+  }
+
+  .usda-result__badge {
+    align-self: flex-start;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 6px;
+  }
+
+  .usda-result__macros {
+    width: 100%;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
 .lookup-results .usda-result:hover {
   background: #f1f5f9;
 }
