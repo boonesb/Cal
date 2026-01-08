@@ -2268,18 +2268,23 @@ const renderFoodForm = (options: {
       return 'Food';
     };
     const getUsdaSubtitle = (result: UsdaFoodResult) => {
-      const isBranded = result.dataType?.toLowerCase() === 'branded';
-      const source = normalizeText(isBranded ? result.brandOwner ?? result.brandName : result.foodCategory);
-      const calories =
-        Number.isFinite(result.labelCalories) && result.labelCalories != null
-          ? result.labelCalories
-          : result.calories;
-      const segments = [];
-      if (source) {
-        segments.push(source);
+      const servingGrams = getUsdaServingGrams(result);
+      const caloriesPer100g = Number.isFinite(result.calories) ? result.calories : null;
+      const labelCalories = Number.isFinite(result.labelCalories) ? result.labelCalories : null;
+      const segments: string[] = [];
+      if (servingGrams) {
+        segments.push(`Per serving: ${formatNumberSmart(servingGrams)} g`);
       }
-      if (calories != null && Number.isFinite(calories)) {
-        segments.push(`${formatNumberSmart(calories)} kcal`);
+      if (servingGrams) {
+        let perServingCalories = labelCalories;
+        if (perServingCalories == null && caloriesPer100g != null) {
+          perServingCalories = caloriesPer100g * (servingGrams / 100);
+        }
+        if (perServingCalories != null && Number.isFinite(perServingCalories)) {
+          segments.push(`${formatNumberSmart(perServingCalories)} kcal`);
+        }
+      } else if (caloriesPer100g != null && Number.isFinite(caloriesPer100g)) {
+        segments.push(`${formatNumberSmart(caloriesPer100g)} kcal per 100 g`);
       }
       return segments.join(' • ');
     };
@@ -2287,6 +2292,7 @@ const renderFoodForm = (options: {
       const isBranded = result.dataType?.toLowerCase() === 'branded';
       const metaLine = getUsdaSubtitle(result);
       const title = getUsdaTitle(result);
+      const metaMarkup = metaLine ? `<div class="usda-result__meta">${metaLine}</div>` : '';
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'usda-result';
@@ -2295,9 +2301,10 @@ const renderFoodForm = (options: {
           <div class="usda-result__title">${title}</div>
           ${isBranded ? `<span class="badge badge--branded usda-result__badge">Branded</span>` : ''}
         </div>
-        <div class="usda-result__meta">${metaLine}</div>`;
+        ${metaMarkup}`;
       btn.addEventListener('click', async () => {
         const draft = createUsdaDraftFromResult(result);
+        draft.name = title;
         const confirmed = await confirmOverwriteIfNeeded('USDA lookup');
         if (!confirmed) return;
         applyDraftFromLookup(draft, { isBranded });
