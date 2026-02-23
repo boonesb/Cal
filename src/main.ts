@@ -82,6 +82,7 @@ type FoodDraft = {
 type Entry = {
   id: string;
   foodName: string;
+  entryType?: EntryType;
   servings: number;
   amountMode?: EntryAmountMode;
   consumedGrams?: number;
@@ -116,6 +117,7 @@ const formatBuildTimestamp = (value: string) => {
 };
 
 type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
+type EntryType = 'saved-food' | 'quick-estimate';
 type EntryAmountMode = 'servings' | 'grams';
 type EntryAmountModeAvailability = 'servings-only' | 'grams-only' | 'both';
 
@@ -229,6 +231,7 @@ const roundTo1 = (num: number) => Math.round(num * 10) / 10;
 const PER_100G_UNIT = 'per100g';
 
 const isEntryAmountMode = (value: unknown): value is EntryAmountMode => value === 'servings' || value === 'grams';
+const isEntryType = (value: unknown): value is EntryType => value === 'saved-food' || value === 'quick-estimate';
 
 const servingsToGrams = (servings: number, servingSizeGrams: number) => roundTo2(servings * servingSizeGrams);
 
@@ -1580,11 +1583,13 @@ const renderDashboard = async (dateOverride?: string) => {
         const carbs = entry.servings * entry.carbsPerServing;
         const protein = entry.servings * entry.proteinPerServing;
         const amountText =
-          entry.amountMode === 'grams' &&
-          Number.isFinite(entry.consumedGrams) &&
-          (entry.consumedGrams ?? 0) > 0
-            ? `${formatNumberSmart(Number(entry.consumedGrams))} g`
-            : `${formatNumberSmart(entry.servings)} serving(s)`;
+          entry.entryType === 'quick-estimate'
+            ? 'Quick estimate'
+            : entry.amountMode === 'grams' &&
+                Number.isFinite(entry.consumedGrams) &&
+                (entry.consumedGrams ?? 0) > 0
+              ? `${formatNumberSmart(Number(entry.consumedGrams))} g`
+              : `${formatNumberSmart(entry.servings)} serving(s)`;
         return `
         <li class="entry-card">
           <div class="entry-main">
@@ -2669,6 +2674,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   if (!entryForm) return;
 
   let selectedFood: Food | undefined;
+  let entryType: EntryType = 'saved-food';
   let servings = 1;
   let grams: number | null = null;
   let servingSizeGrams: number | null = null;
@@ -2676,6 +2682,10 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   let amountModeAvailability: EntryAmountModeAvailability = 'servings-only';
   let perServing = { calories: 0, carbs: 0, protein: 0 };
   let typedName = '';
+  let quickEstimateName = '';
+  let quickEstimateCalories = 0;
+  let quickEstimateCarbs = 0;
+  let quickEstimateProtein = 0;
   let macroBasisLabel = 'Per 100 g';
   let foodLocked = false;
   let entryModeFromDoc: EntryAmountMode | null = null;
@@ -2702,13 +2712,20 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     const entrySnap = await getDoc(entryRef);
     if (entrySnap.exists()) {
       const data = entrySnap.data() as Entry;
+      if (isEntryType(data.entryType)) {
+        entryType = data.entryType;
+      }
       typedName = data.foodName;
+      quickEstimateName = data.foodName;
       servings = data.servings;
       perServing = {
         calories: data.caloriesPerServing,
         carbs: data.carbsPerServing,
         protein: data.proteinPerServing,
       };
+      quickEstimateCalories = data.caloriesPerServing;
+      quickEstimateCarbs = data.carbsPerServing;
+      quickEstimateProtein = data.proteinPerServing;
       selectedFood = foods.find((f) => f.name === data.foodName) || undefined;
       macroBasisLabel = selectedFood ? getEntryMacroBasisLabel(selectedFood) : macroBasisLabel;
       servingSizeGrams = getServingSizeGramsValue(selectedFood) ?? data.servingSizeGramsSnapshot ?? null;
@@ -2721,6 +2738,14 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         grams = servingsToGrams(servings, servingSizeGrams);
       }
     }
+  }
+  if (entryType === 'quick-estimate') {
+    selectedFood = undefined;
+    typedName = '';
+    servings = 1;
+    grams = null;
+    servingSizeGrams = null;
+    amountMode = 'servings';
   }
   foodLocked = Boolean(selectedFood || (entryId && typedName.trim()));
 
@@ -2818,84 +2843,142 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   entryForm.innerHTML = `
     <div class="form-section">
       <div class="section-heading">
-        <h3>Choose food</h3>
-        <p class="small-text muted">Favorites show by default. Type to search your foods.</p>
-      </div>
-      <div id="food-picker" class="${foodLocked ? 'is-hidden' : ''}">
-        <div class="field-group">
-          <label for="food-search">Food</label>
-          <input id="food-search" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
-          <div id="food-suggestions"></div>
+        <h3>Entry type</h3>
+        <div id="entry-type-toggle" class="tabs amount-mode-toggle" aria-label="Entry type">
+          <button type="button" id="entry-type-saved" class="tab">Saved Food</button>
+          <button type="button" id="entry-type-quick" class="tab">Quick Estimate</button>
         </div>
       </div>
-      <div id="selected-food-card" class="selected-food-card ${foodLocked ? '' : 'is-hidden'}">
-        <div>
-          <p class="small-text">Selected food</p>
-          <div class="selected-food-card__name" id="selected-food-name">${selectedFood?.name ?? typedName}</div>
-        </div>
-        <div class="selected-food-card__actions">
-          <button type="button" class="ghost small-button" id="edit-selected-food">Edit food</button>
-          <button type="button" class="secondary small-button" id="change-selected-food">Change</button>
-        </div>
-      </div>
-      <input type="hidden" id="food" name="food" value="${typedName}" />
     </div>
-    <div class="form-section ${foodLocked ? '' : 'is-hidden'}" id="entry-amount-section">
-      <div class="section-heading">
-        <h3 id="entry-amount-heading">Amount</h3>
-        <div id="amount-mode-toggle" class="tabs amount-mode-toggle is-hidden" aria-label="Amount input mode">
-          <button type="button" id="amount-mode-servings" class="tab">Servings</button>
-          <button type="button" id="amount-mode-grams" class="tab">Grams</button>
+    <div id="saved-food-sections">
+      <div class="form-section">
+        <div class="section-heading">
+          <h3>Choose food</h3>
+          <p class="small-text muted">Favorites show by default. Type to search your foods.</p>
+        </div>
+        <div id="food-picker" class="${foodLocked ? 'is-hidden' : ''}">
+          <div class="field-group">
+            <label for="food-search">Food</label>
+            <input id="food-search" autocomplete="off" value="${typedName}" placeholder="Start typing a food" />
+            <div id="food-suggestions"></div>
+          </div>
+        </div>
+        <div id="selected-food-card" class="selected-food-card ${foodLocked ? '' : 'is-hidden'}">
+          <div>
+            <p class="small-text">Selected food</p>
+            <div class="selected-food-card__name" id="selected-food-name">${selectedFood?.name ?? typedName}</div>
+          </div>
+          <div class="selected-food-card__actions">
+            <button type="button" class="ghost small-button" id="edit-selected-food">Edit food</button>
+            <button type="button" class="secondary small-button" id="change-selected-food">Change</button>
+          </div>
+        </div>
+        <input type="hidden" id="food" name="food" value="${typedName}" />
+      </div>
+      <div class="form-section ${foodLocked ? '' : 'is-hidden'}" id="entry-amount-section">
+        <div class="section-heading">
+          <h3 id="entry-amount-heading">Amount</h3>
+          <div id="amount-mode-toggle" class="tabs amount-mode-toggle is-hidden" aria-label="Amount input mode">
+            <button type="button" id="amount-mode-servings" class="tab">Servings</button>
+            <button type="button" id="amount-mode-grams" class="tab">Grams</button>
+          </div>
+        </div>
+        <div class="responsive-row">
+          <div id="servings-field">
+            <label for="servings">Servings</label>
+            <input
+              id="servings"
+              name="servings"
+              type="text"
+              inputmode="decimal"
+              placeholder="e.g., 1.25"
+              value="${formatNumberSmart(servings)}"
+              required
+            />
+            <p class="small-text muted" id="servings-help">Enter servings eaten (minimum 0.01).</p>
+          </div>
+          <div id="grams-field" class="is-hidden">
+            <label for="grams" id="grams-label">Grams eaten</label>
+            <input id="grams" name="grams" type="text" inputmode="decimal" placeholder="e.g., 162" />
+          </div>
+          <div class="totals-panel">
+            <div id="entry-totals"></div>
+            <p class="small-text muted" id="amount-conversion-help"></p>
+          </div>
+        </div>
+        <button type="button" id="toggle-macros" class="ghost small-button">Edit macros</button>
+      </div>
+      <div id="macro-editor" class="form-section">
+        <div class="section-heading">
+          <h3 id="macro-basis-heading">Macros</h3>
+          <p class="small-text muted" id="macro-basis-label"></p>
+        </div>
+        <div class="macro-grid">
+          <div>
+            <label for="calories">Calories</label>
+            <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumberSmart(
+              perServing.calories
+            )}" required />
+          </div>
+          <div>
+            <label for="carbs">Carbs (g)</label>
+            <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumberSmart(
+              perServing.carbs
+            )}" required />
+          </div>
+          <div>
+            <label for="protein">Protein (g)</label>
+            <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumberSmart(
+              perServing.protein
+            )}" required />
+          </div>
         </div>
       </div>
-      <div class="responsive-row">
-        <div id="servings-field">
-          <label for="servings">Servings</label>
-          <input
-            id="servings"
-            name="servings"
-            type="text"
-            inputmode="decimal"
-            placeholder="e.g., 1.25"
-            value="${formatNumberSmart(servings)}"
-            required
-          />
-          <p class="small-text muted" id="servings-help">Enter servings eaten (minimum 0.01).</p>
-        </div>
-        <div id="grams-field" class="is-hidden">
-          <label for="grams" id="grams-label">Grams eaten</label>
-          <input id="grams" name="grams" type="text" inputmode="decimal" placeholder="e.g., 162" />
-        </div>
-        <div class="totals-panel">
-          <div id="entry-totals"></div>
-          <p class="small-text muted" id="amount-conversion-help"></p>
-        </div>
-      </div>
-      <button type="button" id="toggle-macros" class="ghost small-button">Edit macros</button>
     </div>
-    <div id="macro-editor" class="form-section">
+    <div id="quick-estimate-section" class="form-section is-hidden">
       <div class="section-heading">
-        <h3 id="macro-basis-heading">Macros</h3>
-        <p class="small-text muted" id="macro-basis-label"></p>
+        <h3>Quick estimate</h3>
+        <p class="small-text muted">Log one-off meal totals without saving to foods.</p>
+      </div>
+      <div class="field-group">
+        <label for="quick-estimate-name">Name</label>
+        <input
+          id="quick-estimate-name"
+          name="quickEstimateName"
+          value="${quickEstimateName}"
+          placeholder="e.g., Homemade pasta dinner"
+        />
       </div>
       <div class="macro-grid">
         <div>
-          <label for="calories">Calories</label>
-          <input id="calories" name="calories" type="text" inputmode="decimal" value="${formatNumberSmart(
-            perServing.calories
-          )}" required />
+          <label for="quick-estimate-calories">Calories (total)</label>
+          <input
+            id="quick-estimate-calories"
+            name="quickEstimateCalories"
+            type="text"
+            inputmode="decimal"
+            value="${formatNumberSmart(quickEstimateCalories)}"
+          />
         </div>
         <div>
-          <label for="carbs">Carbs (g)</label>
-          <input id="carbs" name="carbs" type="text" inputmode="decimal" value="${formatNumberSmart(
-            perServing.carbs
-          )}" required />
+          <label for="quick-estimate-carbs">Carbs (g total)</label>
+          <input
+            id="quick-estimate-carbs"
+            name="quickEstimateCarbs"
+            type="text"
+            inputmode="decimal"
+            value="${formatNumberSmart(quickEstimateCarbs)}"
+          />
         </div>
         <div>
-          <label for="protein">Protein (g)</label>
-          <input id="protein" name="protein" type="text" inputmode="decimal" value="${formatNumberSmart(
-            perServing.protein
-          )}" required />
+          <label for="quick-estimate-protein">Protein (g total)</label>
+          <input
+            id="quick-estimate-protein"
+            name="quickEstimateProtein"
+            type="text"
+            inputmode="decimal"
+            value="${formatNumberSmart(quickEstimateProtein)}"
+          />
         </div>
       </div>
     </div>
@@ -3023,11 +3106,30 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     setAmountMode(nextMode, { force: true });
   };
 
+  const setEntryType = (nextType: EntryType, options?: { force?: boolean }) => {
+    if (!options?.force && entryType === nextType) return;
+    entryType = nextType;
+    const savedTab = entryForm.querySelector<HTMLButtonElement>('#entry-type-saved');
+    const quickTab = entryForm.querySelector<HTMLButtonElement>('#entry-type-quick');
+    const savedSections = entryForm.querySelector<HTMLDivElement>('#saved-food-sections');
+    const quickSection = entryForm.querySelector<HTMLDivElement>('#quick-estimate-section');
+    savedTab?.classList.toggle('active', entryType === 'saved-food');
+    quickTab?.classList.toggle('active', entryType === 'quick-estimate');
+    savedSections?.classList.toggle('is-hidden', entryType !== 'saved-food');
+    quickSection?.classList.toggle('is-hidden', entryType !== 'quick-estimate');
+    if (entryType === 'saved-food') {
+      setFoodSelectionState(foodLocked);
+      updateTotals();
+      updateConversionHelper();
+    }
+  };
+
   updateMacroBasisLabels(macroBasisLabel);
 
   renderFoodSuggestions(typedName);
   updateEntryInputMode(selectedFood, { preferredMode: entryModeFromDoc ?? state.preferredEntryAmountMode });
   setFoodSelectionState(foodLocked);
+  setEntryType(entryType, { force: true });
 
   const macroEditor = entryForm.querySelector<HTMLDivElement>('#macro-editor');
   const toggleMacrosBtn = entryForm.querySelector<HTMLButtonElement>('#toggle-macros');
@@ -3058,6 +3160,14 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
   entryForm.querySelector<HTMLButtonElement>('#amount-mode-grams')?.addEventListener('click', () => {
     if (amountModeAvailability !== 'both') return;
     setAmountMode('grams');
+  });
+
+  entryForm.querySelector<HTMLButtonElement>('#entry-type-saved')?.addEventListener('click', () => {
+    setEntryType('saved-food');
+  });
+
+  entryForm.querySelector<HTMLButtonElement>('#entry-type-quick')?.addEventListener('click', () => {
+    setEntryType('quick-estimate');
   });
 
   entryForm.querySelector<HTMLButtonElement>('#change-selected-food')?.addEventListener('click', () => {
@@ -3177,6 +3287,41 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
     e.preventDefault();
     if (!state.user) return;
     const formData = new FormData(entryForm);
+    if (entryType === 'quick-estimate') {
+      const estimateName = String(formData.get('quickEstimateName') || '').trim();
+      if (!estimateName) {
+        alert('Estimate name is required.');
+        return;
+      }
+      const rawEstimateCalories = String(formData.get('quickEstimateCalories') || '').trim();
+      const rawEstimateCarbs = String(formData.get('quickEstimateCarbs') || '').trim();
+      const rawEstimateProtein = String(formData.get('quickEstimateProtein') || '').trim();
+      if (!rawEstimateCalories || !rawEstimateCarbs || !rawEstimateProtein) {
+        alert('Enter total calories, carbs, and protein for this estimate.');
+        return;
+      }
+      const estimateCalories = parseDecimal2(rawEstimateCalories, 0);
+      const estimateCarbs = parseDecimal2(rawEstimateCarbs, 0);
+      const estimateProtein = parseDecimal2(rawEstimateProtein, 0);
+      const payload = {
+        foodName: estimateName,
+        entryType: 'quick-estimate' as EntryType,
+        servings: 1,
+        caloriesPerServing: roundTo2(estimateCalories),
+        carbsPerServing: roundTo2(estimateCarbs),
+        proteinPerServing: roundTo2(estimateProtein),
+        createdAt: serverTimestamp(),
+      };
+      if (entryId) {
+        const entryRef = doc(db, 'users', state.user.uid, 'entries', date, 'items', entryId);
+        await setDoc(entryRef, payload);
+      } else {
+        await addDoc(collection(db, 'users', state.user.uid, 'entries', date, 'items'), payload);
+      }
+      setView('dashboard');
+      return;
+    }
+
     const foodName = String(formData.get('food') || '').trim();
     if (!foodName) {
       alert('Food name is required.');
@@ -3204,6 +3349,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
         : undefined;
     const payload: {
       foodName: string;
+      entryType: EntryType;
       amountMode: EntryAmountMode;
       servings: number;
       consumedGrams?: number;
@@ -3214,6 +3360,7 @@ const renderEntryForm = async (options: { date: string; entryId?: string }) => {
       createdAt: ReturnType<typeof serverTimestamp>;
     } = {
       foodName,
+      entryType: 'saved-food',
       amountMode,
       servings: roundTo2(servings),
       caloriesPerServing: roundTo2(perServing.calories),
