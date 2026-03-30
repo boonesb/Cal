@@ -1644,23 +1644,31 @@ const renderTotals = (entries: Entry[], waterLogs: WaterLog[]) => {
         <div class="daily-metrics">
           <div class="daily-metric">
             <div class="daily-metric__label">Calories</div>
-            <div class="daily-metric__value">${formatNumberSmart(totals.calories)}</div>
-            <div class="daily-metric__unit">kcal</div>
+            <div class="daily-metric__value-row">
+              <div class="daily-metric__value">${formatNumberSmart(totals.calories)}</div>
+              <div class="daily-metric__unit">kcal</div>
+            </div>
           </div>
           <div class="daily-metric">
             <div class="daily-metric__label">Carbs</div>
-            <div class="daily-metric__value">${formatNumberSmart(totals.carbs)}</div>
-            <div class="daily-metric__unit">g</div>
+            <div class="daily-metric__value-row">
+              <div class="daily-metric__value">${formatNumberSmart(totals.carbs)}</div>
+              <div class="daily-metric__unit">g</div>
+            </div>
           </div>
           <div class="daily-metric">
             <div class="daily-metric__label">Protein</div>
-            <div class="daily-metric__value">${formatNumberSmart(totals.protein)}</div>
-            <div class="daily-metric__unit">g</div>
+            <div class="daily-metric__value-row">
+              <div class="daily-metric__value">${formatNumberSmart(totals.protein)}</div>
+              <div class="daily-metric__unit">g</div>
+            </div>
           </div>
           <div class="daily-metric daily-metric--water">
             <div class="daily-metric__label">Water</div>
-            <div class="daily-metric__value" id="water-total">${totalWaterOz}</div>
-            <div class="daily-metric__unit">oz</div>
+            <div class="daily-metric__value-row">
+              <div class="daily-metric__value" id="water-total">${totalWaterOz}</div>
+              <div class="daily-metric__unit">oz</div>
+            </div>
             <div class="daily-metric__actions">
               <button id="add-water" class="ghost button-compact">+ Add water</button>
               <button id="water-chooser" class="ghost icon-button button-compact" aria-label="Choose water amount">

@@ -421,6 +421,18 @@ label {
   color: var(--color-muted);
 }
 
+.daily-metrics .daily-metric__value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.daily-metrics .daily-metric__value-row .daily-metric__unit {
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .daily-metric__actions {
   display: flex;
   gap: 0.35rem;
