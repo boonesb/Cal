@@ -5,6 +5,7 @@ Mobile-first calorie, carbs, and protein tracker using Firebase Authentication, 
 ## Features
 - Email/password authentication with 30-minute inactivity timeout
 - Daily dashboard with totals and entries per day (past/future navigation)
+- Daily weight logging on the dashboard, with a separate history view and date-range chart
 - Add/edit/delete entries with live totals
 - Food picker with favorites-first sorting, local filtering, and inline creation when no results are found
 - Foods management with favorites, edit, and delete (entries keep stored snapshots)
@@ -62,8 +63,10 @@ Rules in `firestore.rules` restrict all reads/writes to the authenticated user w
 ### Data model
 - `users/{uid}/foods/{foodId}`: name, caloriesPerServing, carbsPerServing, proteinPerServing, favorite, createdAt
 - `users/{uid}/entries/{date}/items/{entryId}`: foodName, servings, caloriesPerServing, carbsPerServing, proteinPerServing, createdAt
+- `users/{uid}/weights/{date}`: date, weightLb, createdAt, updatedAt
 
 Entries store snapshot values so historical data is preserved even if foods change.
+Weights store one document per day so users can update a daily weigh-in and review charted history over time.
 
 ### Session timeout behavior
 Any interaction (click, scroll, typing, touch) resets a 30-minute inactivity timer. When the timer elapses, the user is signed out and must log in again.

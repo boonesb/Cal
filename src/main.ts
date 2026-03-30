@@ -101,6 +101,14 @@ type WaterLog = {
   createdAt?: string;
 };
 
+type WeightLog = {
+  id: string;
+  date: string;
+  weightLb: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY as string | undefined;
 const BUILD_TIMESTAMP = import.meta.env.BUILD_TIMESTAMP ?? BUILD_TIME_ISO;
 const formatBuildTimestamp = (value: string) => {
@@ -116,10 +124,11 @@ const formatBuildTimestamp = (value: string) => {
   return value.replace('T', ' ').slice(0, 16);
 };
 
-type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food';
+type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food' | 'weight-history';
 type EntryType = 'saved-food' | 'quick-estimate';
 type EntryAmountMode = 'servings' | 'grams';
 type EntryAmountModeAvailability = 'servings-only' | 'grams-only' | 'both';
+type WeightHistoryRange = '30d' | '90d' | 'all';
 
 const state: {
   user: User | null;
@@ -137,6 +146,7 @@ const state: {
   lastWaterMl?: number;
   preferredEntryAmountMode: EntryAmountMode;
   entryAmountModeLoaded: boolean;
+  weightHistoryRange: WeightHistoryRange;
   usdaSearchTerm: string;
   usdaSearchResults: UsdaFoodResult[];
   usdaSearchHasSearched: boolean;
@@ -155,6 +165,7 @@ const state: {
   lastWaterMl: undefined,
   preferredEntryAmountMode: 'servings',
   entryAmountModeLoaded: false,
+  weightHistoryRange: '30d',
   usdaSearchTerm: '',
   usdaSearchResults: [],
   usdaSearchHasSearched: false,
@@ -181,6 +192,8 @@ const formatNumberSmart = (num: number) => {
   return rounded.toFixed(2).replace(/\.?0+$/, '');
 };
 
+const formatWeightLb = (weightLb: number) => `${formatNumberSmart(weightLb)} lb`;
+
 const formatDisplayDate = (ymd: string) => {
   const date = parseYmdToLocalDate(ymd);
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -194,7 +207,7 @@ const applyViewState = (view: View, payload?: { returnDate?: string }) => {
   }
   state.view = view;
   state.currentView =
-    view === 'dashboard'
+    view === 'dashboard' || view === 'weight-history'
       ? 'dashboard'
       : view === 'foods' || (view === 'add-food' && !state.returnToEntryAfterFoodSave)
         ? 'foods'
@@ -229,9 +242,16 @@ const parseDecimalNullable = (raw: string, min: number) => {
 const roundTo2 = (num: number) => Math.round(num * 100) / 100;
 const roundTo1 = (num: number) => Math.round(num * 10) / 10;
 const PER_100G_UNIT = 'per100g';
+const WEIGHT_HISTORY_RANGE_LABELS: Record<WeightHistoryRange, string> = {
+  '30d': 'Last 30 days',
+  '90d': 'Last 90 days',
+  all: 'All time',
+};
 
 const isEntryAmountMode = (value: unknown): value is EntryAmountMode => value === 'servings' || value === 'grams';
 const isEntryType = (value: unknown): value is EntryType => value === 'saved-food' || value === 'quick-estimate';
+const isWeightHistoryRange = (value: unknown): value is WeightHistoryRange =>
+  value === '30d' || value === '90d' || value === 'all';
 
 const servingsToGrams = (servings: number, servingSizeGrams: number) => roundTo2(servings * servingSizeGrams);
 
@@ -761,6 +781,27 @@ const fetchWaterLogsForDate = async (date: string): Promise<WaterLog[]> => {
   }));
 };
 
+const fetchWeightForDate = async (date: string): Promise<WeightLog | null> => {
+  if (!state.user) return null;
+  const weightRef = doc(db, 'users', state.user.uid, 'weights', date);
+  const weightSnap = await getDoc(weightRef);
+  if (!weightSnap.exists()) return null;
+  return {
+    id: weightSnap.id,
+    ...(weightSnap.data() as Omit<WeightLog, 'id'>),
+  };
+};
+
+const fetchWeightHistory = async (): Promise<WeightLog[]> => {
+  if (!state.user) return [];
+  const weightCol = collection(db, 'users', state.user.uid, 'weights');
+  const weightSnapshot = await getDocs(query(weightCol, orderBy('date')));
+  return weightSnapshot.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...(docSnap.data() as Omit<WeightLog, 'id'>),
+  }));
+};
+
 const fetchUserWaterPreference = async () => {
   if (!state.user) return undefined;
   const userRef = doc(db, 'users', state.user.uid);
@@ -814,6 +855,33 @@ const removeLatestWaterLogForDate = async (date: string) => {
   await deleteDoc(doc(db, 'users', state.user.uid, 'waterLogs', date, 'items', latest.id));
 };
 
+const upsertWeightForDate = async (date: string, weightLb: number) => {
+  if (!state.user) return false;
+  const roundedWeight = roundTo2(weightLb);
+  const weightRef = doc(db, 'users', state.user.uid, 'weights', date);
+  const existing = await getDoc(weightRef);
+  if (existing.exists()) {
+    await updateDoc(weightRef, {
+      date,
+      weightLb: roundedWeight,
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  }
+  await setDoc(weightRef, {
+    date,
+    weightLb: roundedWeight,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return false;
+};
+
+const deleteWeightForDate = async (date: string) => {
+  if (!state.user) return;
+  await deleteDoc(doc(db, 'users', state.user.uid, 'weights', date));
+};
+
 const sumEntries = (entries: Entry[]) => {
   return entries.reduce(
     (acc, entry) => {
@@ -831,6 +899,148 @@ const sumEntries = (entries: Entry[]) => {
 };
 
 const sumWaterLogs = (logs: WaterLog[]) => logs.reduce((acc, log) => acc + log.amountMl, 0);
+
+const filterWeightLogsByRange = (logs: WeightLog[], range: WeightHistoryRange) => {
+  if (range === 'all') return logs;
+  const days = range === '30d' ? 30 : 90;
+  const cutoff = addDays(todayStr(), -(days - 1));
+  const today = todayStr();
+  return logs.filter((log) => log.date >= cutoff && log.date <= today);
+};
+
+const buildWeightHistorySummary = (logs: WeightLog[], range: WeightHistoryRange) => {
+  if (!logs.length) {
+    return `${WEIGHT_HISTORY_RANGE_LABELS[range]} • no entries yet`;
+  }
+  const first = logs[0];
+  const last = logs[logs.length - 1];
+  const prefix = `${WEIGHT_HISTORY_RANGE_LABELS[range]} • ${logs.length} entr${logs.length === 1 ? 'y' : 'ies'}`;
+  if (logs.length === 1) {
+    return `${prefix} • ${formatDisplayDate(last.date)}`;
+  }
+  return `${prefix} • ${formatDisplayDate(first.date)} to ${formatDisplayDate(last.date)}`;
+};
+
+const renderWeightHistoryChart = (logs: WeightLog[]) => {
+  if (!logs.length) {
+    return `
+      <div class="weight-chart-empty">
+        <h3>No weight history yet</h3>
+        <p class="small-text muted">Log your weight on the dashboard to start seeing your trend line.</p>
+      </div>
+    `;
+  }
+
+  const svgWidth = 700;
+  const svgHeight = 320;
+  const padding = { top: 20, right: 20, bottom: 46, left: 56 };
+  const plotWidth = svgWidth - padding.left - padding.right;
+  const plotHeight = svgHeight - padding.top - padding.bottom;
+  const weights = logs.map((log) => log.weightLb);
+  const minWeight = Math.min(...weights);
+  const maxWeight = Math.max(...weights);
+  const spread = maxWeight - minWeight;
+  const yPadding = spread === 0 ? Math.max(2, minWeight * 0.02 || 2) : Math.max(1, spread * 0.15);
+  let yMin = Math.max(0, minWeight - yPadding);
+  let yMax = maxWeight + yPadding;
+  if (yMin === yMax) {
+    yMin = Math.max(0, yMin - 1);
+    yMax += 1;
+  }
+  const yRange = yMax - yMin || 1;
+  const toX = (index: number) =>
+    logs.length === 1 ? padding.left + plotWidth / 2 : padding.left + (index / (logs.length - 1)) * plotWidth;
+  const toY = (weight: number) => padding.top + ((yMax - weight) / yRange) * plotHeight;
+  const points = logs.map((log, index) => ({ ...log, x: toX(index), y: toY(log.weightLb) }));
+  const linePoints = points.map((point) => `${point.x},${point.y}`).join(' ');
+  const yTicks = Array.from({ length: 4 }, (_, index) => yMin + ((yMax - yMin) / 3) * index);
+  const xTickIndexes = Array.from(new Set([0, Math.floor((logs.length - 1) / 2), logs.length - 1]));
+
+  return `
+    <div class="weight-chart-frame">
+      <svg viewBox="0 0 ${svgWidth} ${svgHeight}" class="weight-chart" role="img" aria-label="Weight history line chart">
+        ${yTicks
+          .map((tick) => {
+            const y = toY(tick);
+            return `
+              <line x1="${padding.left}" y1="${y}" x2="${svgWidth - padding.right}" y2="${y}" class="weight-chart__grid" />
+              <text x="${padding.left - 10}" y="${y + 4}" text-anchor="end" class="weight-chart__axis-label">${formatNumberSmart(
+                tick
+              )}</text>
+            `;
+          })
+          .join('')}
+        <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${svgHeight - padding.bottom}" class="weight-chart__axis" />
+        <line
+          x1="${padding.left}"
+          y1="${svgHeight - padding.bottom}"
+          x2="${svgWidth - padding.right}"
+          y2="${svgHeight - padding.bottom}"
+          class="weight-chart__axis"
+        />
+        ${
+          points.length > 1
+            ? `<polyline fill="none" points="${linePoints}" class="weight-chart__line" stroke-linecap="round" stroke-linejoin="round" />`
+            : ''
+        }
+        ${points
+          .map(
+            (point) => `
+              <g class="weight-chart__point-group">
+                <circle cx="${point.x}" cy="${point.y}" r="4.5" class="weight-chart__point" />
+                <title>${formatDisplayDate(point.date)}: ${formatWeightLb(point.weightLb)}</title>
+              </g>
+            `
+          )
+          .join('')}
+        ${xTickIndexes
+          .map((index) => {
+            const point = points[index];
+            return `
+              <text x="${point.x}" y="${svgHeight - 12}" text-anchor="middle" class="weight-chart__axis-label">
+                ${formatDisplayDate(point.date)}
+              </text>
+            `;
+          })
+          .join('')}
+      </svg>
+    </div>
+    ${
+      logs.length === 1
+        ? '<p class="small-text muted">Log more days to see how your weight changes over time.</p>'
+        : ''
+    }
+  `;
+};
+
+const renderWeightHistoryEntries = (logs: WeightLog[]) => {
+  if (!logs.length) return '';
+  const recentLogs = [...logs].reverse().slice(0, 10);
+  return `
+    <section class="card stack-card">
+      <div class="compact-header back-row">
+        <div>
+          <h3>Recent entries</h3>
+          <p class="small-text muted">Newest first.</p>
+        </div>
+      </div>
+      <ul class="weight-history-list">
+        ${recentLogs
+          .map(
+            (log) => `
+              <li class="weight-history-list__item">
+                <div>
+                  <div class="weight-history-list__value">${formatWeightLb(log.weightLb)}</div>
+                  <div class="small-text muted">${formatDisplayDate(log.date)}</div>
+                </div>
+              </li>
+            `
+          )
+          .join('')}
+      </ul>
+    </section>
+  `;
+};
 
 const setAppContent = (html: string) => {
   appEl.innerHTML = html;
@@ -1369,6 +1579,9 @@ const renderForView = (
     case 'add-food':
       renderAddFoodView({ prefillName: payload?.prefillName, returnDate: payload?.returnDate, foodId: payload?.foodId });
       break;
+    case 'weight-history':
+      renderWeightHistory();
+      break;
   }
 };
 
@@ -1414,10 +1627,11 @@ document.addEventListener('click', (event) => {
   setNavMenuOpen(false);
 });
 
-const renderTotals = (entries: Entry[], waterLogs: WaterLog[], date: string) => {
+const renderTotals = (entries: Entry[], waterLogs: WaterLog[], weightLog: WeightLog | null, date: string) => {
   const totals = sumEntries(entries);
   const totalWaterMl = sumWaterLogs(waterLogs);
   const totalWaterOz = mlToOz(totalWaterMl);
+  const weightValue = weightLog ? formatNumberSmart(weightLog.weightLb) : '';
   return `
     <div class="totals">
       <div class="total-card">
@@ -1450,6 +1664,30 @@ const renderTotals = (entries: Entry[], waterLogs: WaterLog[], date: string) => 
                 ▾
               </button>
             </div>
+          </div>
+          <div class="daily-metric daily-metric--weight" id="weight-card" tabindex="0">
+            <div class="daily-metric__label">Weight</div>
+            <div class="daily-metric__value">${weightLog ? formatNumberSmart(weightLog.weightLb) : '—'}</div>
+            <div class="daily-metric__unit">${weightLog ? `Logged for ${formatDisplayDate(date)}` : `No weight logged for ${formatDisplayDate(date)}`}</div>
+            <form id="weight-form" class="weight-form">
+              <label for="weight-input" class="visually-hidden">Weight in pounds</label>
+              <div class="weight-form__row">
+                <input
+                  id="weight-input"
+                  name="weight"
+                  type="text"
+                  inputmode="decimal"
+                  placeholder="Enter weight (lb)"
+                  value="${weightValue}"
+                />
+                <button type="submit">${weightLog ? 'Update' : 'Save'}</button>
+              </div>
+              <p class="error-text is-hidden" id="weight-error"></p>
+              <div class="daily-metric__actions">
+                ${weightLog ? '<button type="button" id="delete-weight" class="ghost button-compact">Delete</button>' : ''}
+                <button type="button" id="view-weight-history" class="secondary button-compact">View history</button>
+              </div>
+            </form>
           </div>
         </div>
       </div>
@@ -1526,13 +1764,14 @@ const renderDashboard = async (dateOverride?: string) => {
   if (!entriesList || !totalsEl) return;
   entriesList.innerHTML = '<p class="small-text">Loading entries...</p>';
 
-  const [entries, waterLogs, lastWaterMl] = await Promise.all([
+  const [entries, waterLogs, lastWaterMl, weightLog] = await Promise.all([
     fetchEntriesForDate(state.selectedDate),
     fetchWaterLogsForDate(state.selectedDate),
     fetchUserWaterPreference(),
+    fetchWeightForDate(state.selectedDate),
   ]);
   state.lastWaterMl = lastWaterMl ?? state.lastWaterMl;
-  totalsEl.innerHTML = renderTotals(entries, waterLogs, state.selectedDate);
+  totalsEl.innerHTML = renderTotals(entries, waterLogs, weightLog, state.selectedDate);
 
   const refreshWaterCard = async () => {
     const latestLogs = await fetchWaterLogsForDate(state.selectedDate);
@@ -1572,6 +1811,63 @@ const renderDashboard = async (dateOverride?: string) => {
     const amount = await waterAmountChooser(WATER_PRESETS_OZ);
     if (!amount) return;
     await addWater(ozToMl(amount));
+  });
+
+  const weightCard = totalsEl.querySelector<HTMLElement>('#weight-card');
+  const weightForm = totalsEl.querySelector<HTMLFormElement>('#weight-form');
+  const weightInput = totalsEl.querySelector<HTMLInputElement>('#weight-input');
+  const weightError = totalsEl.querySelector<HTMLParagraphElement>('#weight-error');
+  attachSelectAllOnFocus(weightInput);
+
+  const setWeightError = (message: string) => {
+    if (!weightError) return;
+    weightError.textContent = message;
+    weightError.classList.toggle('is-hidden', !message);
+  };
+
+  weightCard?.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('button') || target.closest('input')) return;
+    weightInput?.focus();
+  });
+
+  weightForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const parsedWeight = parseDecimalNullable(weightInput?.value ?? '', 0.1);
+    if (parsedWeight == null) {
+      setWeightError('Enter a weight in pounds.');
+      weightInput?.focus();
+      return;
+    }
+    setWeightError('');
+    if (weightLog && Math.abs(parsedWeight - weightLog.weightLb) > 0.001) {
+      const confirmed = await confirmDialog({
+        title: 'Replace weight entry?',
+        message: `This will replace your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
+        confirmLabel: 'Replace weight',
+        cancelLabel: 'Keep existing',
+      });
+      if (!confirmed) return;
+    }
+    await upsertWeightForDate(state.selectedDate, parsedWeight);
+    setView('dashboard', { date: state.selectedDate });
+  });
+
+  totalsEl.querySelector<HTMLButtonElement>('#delete-weight')?.addEventListener('click', async () => {
+    if (!weightLog) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete weight entry?',
+      message: `This will remove your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
+      confirmLabel: 'Delete weight',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    await deleteWeightForDate(state.selectedDate);
+    setView('dashboard', { date: state.selectedDate });
+  });
+
+  totalsEl.querySelector<HTMLButtonElement>('#view-weight-history')?.addEventListener('click', () => {
+    setView('weight-history');
   });
 
   if (!entries.length) {
@@ -1635,6 +1931,55 @@ const renderDashboard = async (dateOverride?: string) => {
       })
     );
   }
+};
+
+const renderWeightHistory = async () => {
+  applyViewState('weight-history');
+  const container = buildShell();
+  container.innerHTML = `
+    <section class="card stack-card">
+      <div class="compact-header back-row">
+        <button id="back-dashboard" class="ghost back-link">← Back</button>
+        <div>
+          <h2>Weight history</h2>
+          <p class="small-text muted" id="weight-history-summary">Loading history...</p>
+        </div>
+      </div>
+      <div class="weight-range-toggle" role="tablist" aria-label="Weight history range">
+        <button type="button" class="tab ${state.weightHistoryRange === '30d' ? 'active' : ''}" data-range="30d">30D</button>
+        <button type="button" class="tab ${state.weightHistoryRange === '90d' ? 'active' : ''}" data-range="90d">90D</button>
+        <button type="button" class="tab ${state.weightHistoryRange === 'all' ? 'active' : ''}" data-range="all">All</button>
+      </div>
+      <div id="weight-history-chart">
+        <p class="small-text">Loading chart...</p>
+      </div>
+    </section>
+    <div id="weight-history-list"></div>
+  `;
+
+  container.querySelector('#back-dashboard')?.addEventListener('click', () => {
+    setView('dashboard', { date: state.selectedDate });
+  });
+
+  container.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const range = button.dataset.range;
+      if (!isWeightHistoryRange(range) || range === state.weightHistoryRange) return;
+      state.weightHistoryRange = range;
+      renderWeightHistory();
+    });
+  });
+
+  const historySummary = container.querySelector<HTMLParagraphElement>('#weight-history-summary');
+  const historyChart = container.querySelector<HTMLDivElement>('#weight-history-chart');
+  const historyList = container.querySelector<HTMLDivElement>('#weight-history-list');
+  if (!historySummary || !historyChart || !historyList) return;
+
+  const logs = await fetchWeightHistory();
+  const filteredLogs = filterWeightLogsByRange(logs, state.weightHistoryRange);
+  historySummary.textContent = buildWeightHistorySummary(filteredLogs, state.weightHistoryRange);
+  historyChart.innerHTML = renderWeightHistoryChart(filteredLogs);
+  historyList.innerHTML = renderWeightHistoryEntries(filteredLogs);
 };
 
 const upsertFood = async (food: Partial<Food> & { name: string }) => {

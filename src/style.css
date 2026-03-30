@@ -428,6 +428,36 @@ label {
   flex-wrap: wrap;
 }
 
+.daily-metric--weight {
+  grid-column: 1 / -1;
+  padding: 0.9rem;
+  border: 1px solid #99f6e4;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f0fdfa, #ecfeff);
+  cursor: text;
+}
+
+.daily-metric--weight:focus-within {
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.weight-form {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.15rem;
+}
+
+.weight-form__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.weight-form input {
+  background: #fff;
+}
+
 .button-compact {
   padding: 0.35rem 0.6rem;
   min-height: 36px;
@@ -688,6 +718,89 @@ label {
 
 .date-value {
   font-weight: 600;
+}
+
+.weight-range-toggle {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.weight-chart-frame {
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  padding: 0.85rem;
+}
+
+.weight-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.weight-chart__grid {
+  stroke: #cbd5e1;
+  stroke-dasharray: 4 4;
+  stroke-width: 1;
+}
+
+.weight-chart__axis {
+  stroke: #94a3b8;
+  stroke-width: 1.2;
+}
+
+.weight-chart__line {
+  stroke: var(--color-primary);
+  stroke-width: 3;
+}
+
+.weight-chart__point {
+  fill: var(--color-primary);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.weight-chart__axis-label {
+  fill: #64748b;
+  font-size: 12px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.weight-chart-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 16px;
+  background: #f8fafc;
+  padding: 1.5rem 1rem;
+  text-align: center;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.weight-chart-empty h3 {
+  margin: 0;
+}
+
+.weight-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.weight-history-list__item {
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  padding: 0.8rem 0.9rem;
+  background: #fff;
+}
+
+.weight-history-list__value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-ink);
 }
 
 .toast {
@@ -1414,5 +1527,9 @@ input[aria-invalid='true'] {
 
   .primary-cta {
     width: 100%;
+  }
+
+  .weight-form__row {
+    grid-template-columns: 1fr;
   }
 }
