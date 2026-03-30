@@ -124,7 +124,7 @@ const formatBuildTimestamp = (value: string) => {
   return value.replace('T', ' ').slice(0, 16);
 };
 
-type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food' | 'weight-history';
+type View = 'dashboard' | 'foods' | 'add-entry' | 'edit-entry' | 'add-food' | 'weight';
 type EntryType = 'saved-food' | 'quick-estimate';
 type EntryAmountMode = 'servings' | 'grams';
 type EntryAmountModeAvailability = 'servings-only' | 'grams-only' | 'both';
@@ -134,7 +134,7 @@ const state: {
   user: User | null;
   selectedDate: string;
   view: View;
-  currentView: 'dashboard' | 'foods' | 'entry';
+  currentView: 'dashboard' | 'foods' | 'weight' | 'entry';
   foodCache: Food[];
   entryFormFoodCacheLoaded: boolean;
   inactivityTimer: number | null;
@@ -206,12 +206,15 @@ const applyViewState = (view: View, payload?: { returnDate?: string }) => {
     state.returnToEntryAfterFoodSave = false;
   }
   state.view = view;
-  state.currentView =
-    view === 'dashboard' || view === 'weight-history'
-      ? 'dashboard'
-      : view === 'foods' || (view === 'add-food' && !state.returnToEntryAfterFoodSave)
-        ? 'foods'
-        : 'entry';
+  if (view === 'dashboard') {
+    state.currentView = 'dashboard';
+  } else if (view === 'weight') {
+    state.currentView = 'weight';
+  } else if (view === 'foods' || (view === 'add-food' && !state.returnToEntryAfterFoodSave)) {
+    state.currentView = 'foods';
+  } else {
+    state.currentView = 'entry';
+  }
 };
 
 const parseDecimal2 = (raw: string, min: number) => {
@@ -1481,7 +1484,7 @@ const renderLogin = () => {
 };
 
 const renderNav = () => {
-  const navActive = (view: 'dashboard' | 'foods' | 'entry') => {
+  const navActive = (view: 'dashboard' | 'foods' | 'weight' | 'entry') => {
     return state.currentView === view ? 'active' : '';
   };
   const header = document.createElement('header');
@@ -1502,6 +1505,7 @@ const renderNav = () => {
     <nav class="tabs" aria-label="Primary">
       <button id="nav-dashboard" class="tab ${navActive('dashboard')}">Dashboard</button>
       <button id="nav-foods" class="tab ${navActive('foods')}">Foods</button>
+      <button id="nav-weight" class="tab ${navActive('weight')}">Weight</button>
     </nav>
     <button id="nav-add-entry-fab" class="fab-add-entry" aria-label="Add entry">+ Add entry</button>
   `;
@@ -1579,8 +1583,8 @@ const renderForView = (
     case 'add-food':
       renderAddFoodView({ prefillName: payload?.prefillName, returnDate: payload?.returnDate, foodId: payload?.foodId });
       break;
-    case 'weight-history':
-      renderWeightHistory();
+    case 'weight':
+      renderWeight(payload?.date);
       break;
   }
 };
@@ -1627,11 +1631,10 @@ document.addEventListener('click', (event) => {
   setNavMenuOpen(false);
 });
 
-const renderTotals = (entries: Entry[], waterLogs: WaterLog[], weightLog: WeightLog | null, date: string) => {
+const renderTotals = (entries: Entry[], waterLogs: WaterLog[]) => {
   const totals = sumEntries(entries);
   const totalWaterMl = sumWaterLogs(waterLogs);
   const totalWaterOz = mlToOz(totalWaterMl);
-  const weightValue = weightLog ? formatNumberSmart(weightLog.weightLb) : '';
   return `
     <div class="totals">
       <div class="total-card">
@@ -1664,30 +1667,6 @@ const renderTotals = (entries: Entry[], waterLogs: WaterLog[], weightLog: Weight
                 ▾
               </button>
             </div>
-          </div>
-          <div class="daily-metric daily-metric--weight" id="weight-card" tabindex="0">
-            <div class="daily-metric__label">Weight</div>
-            <div class="daily-metric__value">${weightLog ? formatNumberSmart(weightLog.weightLb) : '—'}</div>
-            <div class="daily-metric__unit">${weightLog ? `Logged for ${formatDisplayDate(date)}` : `No weight logged for ${formatDisplayDate(date)}`}</div>
-            <form id="weight-form" class="weight-form">
-              <label for="weight-input" class="visually-hidden">Weight in pounds</label>
-              <div class="weight-form__row">
-                <input
-                  id="weight-input"
-                  name="weight"
-                  type="text"
-                  inputmode="decimal"
-                  placeholder="Enter weight (lb)"
-                  value="${weightValue}"
-                />
-                <button type="submit">${weightLog ? 'Update' : 'Save'}</button>
-              </div>
-              <p class="error-text is-hidden" id="weight-error"></p>
-              <div class="daily-metric__actions">
-                ${weightLog ? '<button type="button" id="delete-weight" class="ghost button-compact">Delete</button>' : ''}
-                <button type="button" id="view-weight-history" class="secondary button-compact">View history</button>
-              </div>
-            </form>
           </div>
         </div>
       </div>
@@ -1764,14 +1743,13 @@ const renderDashboard = async (dateOverride?: string) => {
   if (!entriesList || !totalsEl) return;
   entriesList.innerHTML = '<p class="small-text">Loading entries...</p>';
 
-  const [entries, waterLogs, lastWaterMl, weightLog] = await Promise.all([
+  const [entries, waterLogs, lastWaterMl] = await Promise.all([
     fetchEntriesForDate(state.selectedDate),
     fetchWaterLogsForDate(state.selectedDate),
     fetchUserWaterPreference(),
-    fetchWeightForDate(state.selectedDate),
   ]);
   state.lastWaterMl = lastWaterMl ?? state.lastWaterMl;
-  totalsEl.innerHTML = renderTotals(entries, waterLogs, weightLog, state.selectedDate);
+  totalsEl.innerHTML = renderTotals(entries, waterLogs);
 
   const refreshWaterCard = async () => {
     const latestLogs = await fetchWaterLogsForDate(state.selectedDate);
@@ -1811,63 +1789,6 @@ const renderDashboard = async (dateOverride?: string) => {
     const amount = await waterAmountChooser(WATER_PRESETS_OZ);
     if (!amount) return;
     await addWater(ozToMl(amount));
-  });
-
-  const weightCard = totalsEl.querySelector<HTMLElement>('#weight-card');
-  const weightForm = totalsEl.querySelector<HTMLFormElement>('#weight-form');
-  const weightInput = totalsEl.querySelector<HTMLInputElement>('#weight-input');
-  const weightError = totalsEl.querySelector<HTMLParagraphElement>('#weight-error');
-  attachSelectAllOnFocus(weightInput);
-
-  const setWeightError = (message: string) => {
-    if (!weightError) return;
-    weightError.textContent = message;
-    weightError.classList.toggle('is-hidden', !message);
-  };
-
-  weightCard?.addEventListener('click', (event) => {
-    const target = event.target as HTMLElement;
-    if (target.closest('button') || target.closest('input')) return;
-    weightInput?.focus();
-  });
-
-  weightForm?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const parsedWeight = parseDecimalNullable(weightInput?.value ?? '', 0.1);
-    if (parsedWeight == null) {
-      setWeightError('Enter a weight in pounds.');
-      weightInput?.focus();
-      return;
-    }
-    setWeightError('');
-    if (weightLog && Math.abs(parsedWeight - weightLog.weightLb) > 0.001) {
-      const confirmed = await confirmDialog({
-        title: 'Replace weight entry?',
-        message: `This will replace your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
-        confirmLabel: 'Replace weight',
-        cancelLabel: 'Keep existing',
-      });
-      if (!confirmed) return;
-    }
-    await upsertWeightForDate(state.selectedDate, parsedWeight);
-    setView('dashboard', { date: state.selectedDate });
-  });
-
-  totalsEl.querySelector<HTMLButtonElement>('#delete-weight')?.addEventListener('click', async () => {
-    if (!weightLog) return;
-    const confirmed = await confirmDialog({
-      title: 'Delete weight entry?',
-      message: `This will remove your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
-      confirmLabel: 'Delete weight',
-      tone: 'danger',
-    });
-    if (!confirmed) return;
-    await deleteWeightForDate(state.selectedDate);
-    setView('dashboard', { date: state.selectedDate });
-  });
-
-  totalsEl.querySelector<HTMLButtonElement>('#view-weight-history')?.addEventListener('click', () => {
-    setView('weight-history');
   });
 
   if (!entries.length) {
@@ -1933,22 +1854,59 @@ const renderDashboard = async (dateOverride?: string) => {
   }
 };
 
-const renderWeightHistory = async () => {
-  applyViewState('weight-history');
+const renderWeight = async (dateOverride?: string) => {
+  applyViewState('weight');
+  if (dateOverride) {
+    state.selectedDate = dateOverride;
+  }
   const container = buildShell();
   container.innerHTML = `
     <section class="card stack-card">
-      <div class="compact-header back-row">
-        <button id="back-dashboard" class="ghost back-link">← Back</button>
-        <div>
-          <h2>Weight history</h2>
-          <p class="small-text muted" id="weight-history-summary">Loading history...</p>
+      <div class="dashboard-header">
+        <h2>Weight</h2>
+        <div class="date-row">
+          <button id="prev-weight-day" class="ghost icon-button date-arrow" aria-label="Previous day">‹</button>
+          <button id="weight-date-display" class="date-display" type="button" aria-label="Select date">
+            <span class="date-value">${formatDisplayDate(state.selectedDate)}</span>
+          </button>
+          <button id="next-weight-day" class="ghost icon-button date-arrow" aria-label="Next day">›</button>
+          <input type="date" id="weight-date-picker" class="visually-hidden" value="${state.selectedDate}" />
         </div>
       </div>
-      <div class="weight-range-toggle" role="tablist" aria-label="Weight history range">
-        <button type="button" class="tab ${state.weightHistoryRange === '30d' ? 'active' : ''}" data-range="30d">30D</button>
-        <button type="button" class="tab ${state.weightHistoryRange === '90d' ? 'active' : ''}" data-range="90d">90D</button>
-        <button type="button" class="tab ${state.weightHistoryRange === 'all' ? 'active' : ''}" data-range="all">All</button>
+      <div class="daily-metric daily-metric--weight">
+        <div class="daily-metric__label">Log weight</div>
+        <div class="daily-metric__value" id="weight-page-value">--</div>
+        <div class="daily-metric__unit" id="weight-page-caption">Loading saved entry...</div>
+        <form id="weight-form" class="weight-form">
+          <label for="weight-input" class="visually-hidden">Weight in pounds</label>
+          <div class="weight-form__row">
+            <input
+              id="weight-input"
+              name="weight"
+              type="text"
+              inputmode="decimal"
+              placeholder="Enter weight (lb)"
+            />
+            <button type="submit" id="weight-submit">Save</button>
+          </div>
+          <p class="error-text is-hidden" id="weight-error"></p>
+          <div class="daily-metric__actions">
+            <button type="button" id="delete-weight" class="ghost button-compact is-hidden">Delete</button>
+          </div>
+        </form>
+      </div>
+    </section>
+    <section class="card stack-card">
+      <div class="compact-header">
+        <div>
+          <h3>Trend</h3>
+          <p class="small-text muted" id="weight-history-summary">Loading history...</p>
+        </div>
+        <div class="weight-range-toggle" role="tablist" aria-label="Weight history range">
+          <button type="button" class="tab ${state.weightHistoryRange === '30d' ? 'active' : ''}" data-range="30d">30D</button>
+          <button type="button" class="tab ${state.weightHistoryRange === '90d' ? 'active' : ''}" data-range="90d">90D</button>
+          <button type="button" class="tab ${state.weightHistoryRange === 'all' ? 'active' : ''}" data-range="all">All</button>
+        </div>
       </div>
       <div id="weight-history-chart">
         <p class="small-text">Loading chart...</p>
@@ -1957,8 +1915,33 @@ const renderWeightHistory = async () => {
     <div id="weight-history-list"></div>
   `;
 
-  container.querySelector('#back-dashboard')?.addEventListener('click', () => {
-    setView('dashboard', { date: state.selectedDate });
+  const updateDate = (newDate: string) => {
+    state.selectedDate = newDate;
+    setView('weight', { date: newDate });
+  };
+
+  container.querySelector('#prev-weight-day')?.addEventListener('click', () => {
+    updateDate(addDays(state.selectedDate, -1));
+  });
+
+  container.querySelector('#next-weight-day')?.addEventListener('click', () => {
+    updateDate(addDays(state.selectedDate, 1));
+  });
+
+  container.querySelector('#weight-date-display')?.addEventListener('click', () => {
+    const picker = container.querySelector<HTMLInputElement>('#weight-date-picker');
+    if (!picker) return;
+    const pickerWithShow = picker as HTMLInputElement & { showPicker?: () => void };
+    if (typeof pickerWithShow.showPicker === 'function') {
+      pickerWithShow.showPicker();
+    } else {
+      picker.focus();
+    }
+  });
+
+  container.querySelector<HTMLInputElement>('#weight-date-picker')?.addEventListener('change', (event) => {
+    const value = (event.target as HTMLInputElement).value;
+    updateDate(value || todayStr());
   });
 
   container.querySelectorAll<HTMLButtonElement>('[data-range]').forEach((button) => {
@@ -1966,16 +1949,84 @@ const renderWeightHistory = async () => {
       const range = button.dataset.range;
       if (!isWeightHistoryRange(range) || range === state.weightHistoryRange) return;
       state.weightHistoryRange = range;
-      renderWeightHistory();
+      renderWeight();
     });
   });
 
+  const [weightLog, logs] = await Promise.all([fetchWeightForDate(state.selectedDate), fetchWeightHistory()]);
+  const weightForm = container.querySelector<HTMLFormElement>('#weight-form');
+  const weightInput = container.querySelector<HTMLInputElement>('#weight-input');
+  const weightSubmit = container.querySelector<HTMLButtonElement>('#weight-submit');
+  const weightDelete = container.querySelector<HTMLButtonElement>('#delete-weight');
+  const weightValueEl = container.querySelector<HTMLDivElement>('#weight-page-value');
+  const weightCaptionEl = container.querySelector<HTMLDivElement>('#weight-page-caption');
+  const weightError = container.querySelector<HTMLParagraphElement>('#weight-error');
   const historySummary = container.querySelector<HTMLParagraphElement>('#weight-history-summary');
   const historyChart = container.querySelector<HTMLDivElement>('#weight-history-chart');
   const historyList = container.querySelector<HTMLDivElement>('#weight-history-list');
-  if (!historySummary || !historyChart || !historyList) return;
+  if (
+    !weightForm ||
+    !weightInput ||
+    !weightSubmit ||
+    !weightDelete ||
+    !weightValueEl ||
+    !weightCaptionEl ||
+    !weightError ||
+    !historySummary ||
+    !historyChart ||
+    !historyList
+  )
+    return;
 
-  const logs = await fetchWeightHistory();
+  attachSelectAllOnFocus(weightInput);
+  weightInput.value = weightLog ? formatNumberSmart(weightLog.weightLb) : '';
+  weightValueEl.textContent = weightLog ? formatWeightLb(weightLog.weightLb) : '--';
+  weightCaptionEl.textContent = weightLog
+    ? `Logged for ${formatDisplayDate(state.selectedDate)}`
+    : `No weight logged for ${formatDisplayDate(state.selectedDate)}`;
+  weightSubmit.textContent = weightLog ? 'Update' : 'Save';
+  weightDelete.classList.toggle('is-hidden', !weightLog);
+
+  const setWeightError = (message: string) => {
+    weightError.textContent = message;
+    weightError.classList.toggle('is-hidden', !message);
+  };
+
+  weightForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const parsedWeight = parseDecimalNullable(weightInput.value ?? '', 0.1);
+    if (parsedWeight == null) {
+      setWeightError('Enter a weight in pounds.');
+      weightInput.focus();
+      return;
+    }
+    setWeightError('');
+    if (weightLog && Math.abs(parsedWeight - weightLog.weightLb) > 0.001) {
+      const confirmed = await confirmDialog({
+        title: 'Replace weight entry?',
+        message: `This will replace your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
+        confirmLabel: 'Replace weight',
+        cancelLabel: 'Keep existing',
+      });
+      if (!confirmed) return;
+    }
+    await upsertWeightForDate(state.selectedDate, parsedWeight);
+    setView('weight', { date: state.selectedDate });
+  });
+
+  weightDelete.addEventListener('click', async () => {
+    if (!weightLog) return;
+    const confirmed = await confirmDialog({
+      title: 'Delete weight entry?',
+      message: `This will remove your saved weight for ${formatDisplayDate(state.selectedDate)}.`,
+      confirmLabel: 'Delete weight',
+      tone: 'danger',
+    });
+    if (!confirmed) return;
+    await deleteWeightForDate(state.selectedDate);
+    setView('weight', { date: state.selectedDate });
+  });
+
   const filteredLogs = filterWeightLogsByRange(logs, state.weightHistoryRange);
   historySummary.textContent = buildWeightHistorySummary(filteredLogs, state.weightHistoryRange);
   historyChart.innerHTML = renderWeightHistoryChart(filteredLogs);
@@ -3783,6 +3834,10 @@ appEl.addEventListener('click', (event) => {
   }
   if (target.id === 'nav-foods') {
     setView('foods');
+    setNavMenuOpen(false);
+  }
+  if (target.id === 'nav-weight') {
+    setView('weight', { date: state.selectedDate });
     setNavMenuOpen(false);
   }
   if (target.id === 'nav-add-entry' || target.id === 'nav-add-entry-fab') {
