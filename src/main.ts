@@ -2101,9 +2101,6 @@ const renderFoodForm = (options: {
   let servingSize = food?.servingSize;
   let servingSizeUnit = food?.servingSizeUnit;
   let servingSizeGrams = food?.servingSizeGrams ?? (food?.servingSizeUnit === 'g' ? food?.servingSize : undefined);
-  if (!servingSizeGrams && food && !isPer100gUnit(food.servingSizeUnit)) {
-    servingSizeGrams = 100;
-  }
   let previousDraft: FoodDraft | null = null;
   let initialDraft: FoodDraft | null = null;
   let appliedSummary: { draft: FoodDraft; isBranded: boolean } | null = null;
@@ -2113,6 +2110,7 @@ const renderFoodForm = (options: {
   const scanSupported = Boolean(navigator.mediaDevices?.getUserMedia);
   const form = document.createElement('form');
   form.className = 'form-grid form-grid--stack add-food-form';
+  form.noValidate = true;
   form.innerHTML = `
     <div class="form-section find-section">
       <div class="section-heading">
@@ -2185,7 +2183,6 @@ const renderFoodForm = (options: {
             name="servingSizeGrams"
             type="text"
             inputmode="decimal"
-            required
             placeholder="e.g., 45"
             value="${servingSizeGrams ? formatNumberSmart(servingSizeGrams) : ''}"
           />
@@ -2223,24 +2220,51 @@ const renderFoodForm = (options: {
         <button type="submit">Save food</button>
       </div>
     </div>
+    <p class="error-text is-hidden" id="food-form-error" role="alert"></p>
   `;
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    setFoodFormError('');
+    setInputValidity(nameInput, false);
+    setInputValidity(servingGramsInput, false);
     const formData = new FormData(form);
-    const gramsValue = parseDecimal2(String(formData.get('servingSizeGrams') || ''), 0.01);
+    const name = String(formData.get('name') || '').trim();
+    const servingValue = parseDecimalNullable(String(formData.get('servingSizeGrams') || ''), 0.01);
+    if (!name) {
+      setInputValidity(nameInput, true);
+      setAddFoodMode('edit', { focus: true });
+      setFoodFormError('Food name is required.');
+      return;
+    }
     if (isPer100gUnit(servingSizeUnit)) {
       servingSizeGrams = 100;
       servingSize = 100;
       servingSizeUnit = PER_100G_UNIT;
     } else {
-      servingSizeGrams = gramsValue;
-      servingSize = gramsValue;
-      servingSizeUnit = 'g';
+      const normalizedServingUnit = normalizeServingUnit(servingSizeUnit) ?? 'g';
+      if (servingValue == null || servingValue <= 0) {
+        setInputValidity(servingGramsInput, true);
+        setAddFoodMode('edit');
+        servingGramsInput?.focus();
+        setFoodFormError(
+          normalizedServingUnit === 'ml' ? 'Serving size in ml is required.' : 'Serving size in grams is required.'
+        );
+        return;
+      }
+      if (normalizedServingUnit === 'ml') {
+        servingSize = servingValue;
+        servingSizeUnit = 'ml';
+        servingSizeGrams = undefined;
+      } else {
+        servingSizeGrams = servingValue;
+        servingSize = servingValue;
+        servingSizeUnit = 'g';
+      }
     }
     const payload = {
       id: food?.id,
-      name: String(formData.get('name') || '').trim(),
+      name,
       caloriesPerServing: caloriesVal,
       carbsPerServing: carbsVal,
       proteinPerServing: proteinVal,
@@ -2250,9 +2274,14 @@ const renderFoodForm = (options: {
       servingSizeUnit,
       servingSizeGrams,
     } as Food;
-    const id = await upsertFood(payload);
-    const savedFood = { ...payload, id } as Food;
-    onSave(savedFood);
+    try {
+      const id = await upsertFood(payload);
+      const savedFood = { ...payload, id } as Food;
+      onSave(savedFood);
+    } catch (error) {
+      setFoodFormError('Unable to save this food right now. Try again.');
+      console.error('Unable to save food.', error);
+    }
   });
 
   const nameInput = form.querySelector<HTMLInputElement>('#food-name');
@@ -2266,6 +2295,7 @@ const renderFoodForm = (options: {
   const caloriesLabelEl = form.querySelector<HTMLLabelElement>('#calories-label');
   const carbsLabelEl = form.querySelector<HTMLLabelElement>('#carbs-label');
   const proteinLabelEl = form.querySelector<HTMLLabelElement>('#protein-label');
+  const foodFormError = form.querySelector<HTMLParagraphElement>('#food-form-error');
   const lookupBtn = form.querySelector<HTMLButtonElement>('#lookup-nutrition');
   const scanBtn = form.querySelector<HTMLButtonElement>('#scan-barcode');
   const lookupCard = form.querySelector<HTMLDivElement>('#lookup-card');
@@ -2278,6 +2308,50 @@ const renderFoodForm = (options: {
   const summaryBranded = form.querySelector<HTMLSpanElement>('#summary-branded');
   const summaryEditButton = form.querySelector<HTMLButtonElement>('#summary-edit');
   let lookupResults: HTMLDivElement | null = null;
+
+  const setInputValidity = (input: HTMLInputElement | null, invalid: boolean) => {
+    if (!input) return;
+    input.setAttribute('aria-invalid', invalid ? 'true' : 'false');
+  };
+
+  const setFoodFormError = (message: string) => {
+    if (!foodFormError) return;
+    foodFormError.textContent = message;
+    foodFormError.classList.toggle('is-hidden', !message);
+  };
+
+  const getServingInputUnit = () => {
+    if (isPer100gUnit(servingSizeUnit)) return 'g';
+    return normalizeServingUnit(servingSizeUnit) ?? 'g';
+  };
+
+  const getServingInputValue = () => {
+    if (isPer100gUnit(servingSizeUnit)) return 100;
+    const servingUnit = getServingInputUnit();
+    if (servingUnit === 'ml') {
+      if (Number.isFinite(servingSize) && (servingSize ?? 0) > 0) {
+        return Number(servingSize);
+      }
+      const parsedLabel = servingLabel ? parseServingSize(servingLabel) : null;
+      if (parsedLabel?.unit === 'ml') {
+        return parsedLabel.amount;
+      }
+      return undefined;
+    }
+    if (Number.isFinite(servingSizeGrams) && (servingSizeGrams ?? 0) > 0) {
+      return Number(servingSizeGrams);
+    }
+    if (Number.isFinite(servingSize) && (servingSize ?? 0) > 0) {
+      return Number(servingSize);
+    }
+    return undefined;
+  };
+
+  const syncServingInputValue = () => {
+    if (!servingGramsInput) return;
+    const value = getServingInputValue();
+    servingGramsInput.value = value ? formatNumberSmart(value) : '';
+  };
 
   const updateServingContext = (draft?: Partial<FoodDraft>) => {
     if (draft && 'servingLabel' in draft) servingLabel = draft.servingLabel;
@@ -2295,11 +2369,18 @@ const renderFoodForm = (options: {
 
   const updateFoodFormBasisLabels = () => {
     const isPer100g = isPer100gUnit(servingSizeUnit);
+    const servingUnit = getServingInputUnit();
     if (servingGramsLabel) {
-      servingGramsLabel.textContent = isPer100g ? 'Nutrition basis (g)' : 'Serving size (g)';
+      servingGramsLabel.textContent = isPer100g ? 'Nutrition basis (g)' : `Serving size (${servingUnit})`;
     }
     if (servingGramsHelp) {
-      servingGramsHelp.textContent = isPer100g ? 'Nutrition is stored per 100 g (no serving size).' : '';
+      if (isPer100g) {
+        servingGramsHelp.textContent = 'Nutrition is stored per 100 g (no serving size).';
+      } else if (servingUnit === 'ml') {
+        servingGramsHelp.textContent = 'Volume-based serving size. This food will be tracked by servings.';
+      } else {
+        servingGramsHelp.textContent = '';
+      }
     }
     const perLabel = isPer100g ? 'per 100 g' : 'per serving';
     if (caloriesLabelEl) caloriesLabelEl.textContent = `Calories ${perLabel}`;
@@ -2307,11 +2388,13 @@ const renderFoodForm = (options: {
     if (proteinLabelEl) proteinLabelEl.textContent = `Protein (g) ${perLabel}`;
     if (servingGramsInput) {
       servingGramsInput.readOnly = isPer100g;
+      servingGramsInput.placeholder = servingUnit === 'ml' ? 'e.g., 240' : 'e.g., 45';
     }
   };
 
   updateServingContext({ servingLabel, servingSize, servingSizeUnit, servingSizeGrams });
   updateFoodFormBasisLabels();
+  syncServingInputValue();
 
   const ensureLookupResults = () => {
     if (lookupResults) return lookupResults;
@@ -2346,14 +2429,13 @@ const renderFoodForm = (options: {
   };
 
   const getSummaryBasisLabel = (draft: FoodDraft) => {
-    if (!draft.servingSizeGrams || !Number.isFinite(draft.servingSizeGrams) || draft.servingSizeGrams <= 0) {
-      return 'Per 100 g';
-    }
-    const isPer100g = isPer100gUnit(draft.servingSizeUnit);
-    if (isPer100g) {
-      return 'Per 100 g';
-    }
-    return `Per serving: ${formatNumberSmart(draft.servingSizeGrams)} g`;
+    const anchor = resolveServingAnchor({
+      servingLabel: draft.servingLabel,
+      servingSize: draft.servingSize,
+      servingSizeUnit: draft.servingSizeUnit,
+      servingSizeGrams: draft.servingSizeGrams,
+    });
+    return anchor ? `Per serving: ${anchor.label}` : 'Per 100 g';
   };
 
   const setSummaryCard = (draft: FoodDraft | null, meta?: { isBranded?: boolean }) => {
@@ -2399,16 +2481,13 @@ const renderFoodForm = (options: {
     if (caloriesInput) caloriesInput.value = formatNumberSmart(caloriesVal);
     if (carbsInput) carbsInput.value = formatNumberSmart(carbsVal);
     if (proteinInput) proteinInput.value = formatNumberSmart(proteinVal);
-    if (servingGramsInput) {
-      const gramsValue = draft.servingSizeGrams ?? servingSizeGrams;
-      servingGramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
-    }
     updateServingContext({
       servingLabel: draft.servingLabel,
       servingSize: draft.servingSize,
       servingSizeUnit: draft.servingSizeUnit,
       servingSizeGrams: draft.servingSizeGrams,
     });
+    syncServingInputValue();
     updateFoodFormBasisLabels();
   };
 
@@ -2444,14 +2523,17 @@ const renderFoodForm = (options: {
       proteinPerServing: protein,
       servingLabel: anchor?.label,
       servingSize: anchor ? anchor.amount : 100,
-      servingSizeUnit: anchor ? 'g' : PER_100G_UNIT,
-      servingSizeGrams: anchor ? anchor.amount : 100,
+      servingSizeUnit: anchor ? anchor.unit : PER_100G_UNIT,
+      servingSizeGrams: anchor?.unit === 'g' ? anchor.amount : anchor ? undefined : 100,
     };
   };
 
   const applyDraftFromLookup = (draft: FoodDraft, meta?: { isBranded?: boolean }) => {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
+    setFoodFormError('');
+    setInputValidity(nameInput, false);
+    setInputValidity(servingGramsInput, false);
     restoreDraft(draft);
     setSummaryCard(draft, { isBranded: meta?.isBranded });
     removeLookupResults();
@@ -2466,6 +2548,9 @@ const renderFoodForm = (options: {
     previousDraft = captureCurrentDraft();
     previousBarcode = currentBarcode;
     currentBarcode = barcode;
+    setFoodFormError('');
+    setInputValidity(nameInput, false);
+    setInputValidity(servingGramsInput, false);
     caloriesVal = draft.caloriesPerServing;
     carbsVal = draft.carbsPerServing;
     proteinVal = draft.proteinPerServing;
@@ -2482,11 +2567,8 @@ const renderFoodForm = (options: {
       servingSizeUnit: draft.servingSizeUnit,
       servingSizeGrams: draft.servingSizeGrams,
     });
+    syncServingInputValue();
     updateFoodFormBasisLabels();
-    if (servingGramsInput) {
-      const gramsValue = draft.servingSizeGrams ?? servingSizeGrams;
-      servingGramsInput.value = gramsValue ? formatNumberSmart(gramsValue) : '';
-    }
     setBarcodeStatus(
       barcode
         ? `Found ${barcode}${draft.servingLabel ? ` • ${draft.servingLabel}` : ''}. Review and save.`
@@ -2752,11 +2834,36 @@ const renderFoodForm = (options: {
     proteinVal = value;
   });
   attachDecimalInput(servingGramsInput, 0.01, (value) => {
+    if (isPer100gUnit(servingSizeUnit)) {
+      servingSizeGrams = 100;
+      servingSize = 100;
+      servingSizeUnit = PER_100G_UNIT;
+      updateServingContext({ servingSize: 100, servingSizeUnit: PER_100G_UNIT, servingSizeGrams: 100 });
+      updateFoodFormBasisLabels();
+      return;
+    }
+    if (getServingInputUnit() === 'ml') {
+      servingSize = value;
+      servingSizeUnit = 'ml';
+      servingSizeGrams = undefined;
+      updateServingContext({ servingSize: value, servingSizeUnit: 'ml', servingSizeGrams: undefined });
+      updateFoodFormBasisLabels();
+      return;
+    }
     servingSizeGrams = value;
     servingSize = value;
     servingSizeUnit = 'g';
-    updateServingContext({ servingSizeGrams: value });
+    updateServingContext({ servingSize: value, servingSizeUnit: 'g', servingSizeGrams: value });
     updateFoodFormBasisLabels();
+  });
+
+  nameInput?.addEventListener('input', () => {
+    setFoodFormError('');
+    setInputValidity(nameInput, false);
+  });
+  servingGramsInput?.addEventListener('input', () => {
+    setFoodFormError('');
+    setInputValidity(servingGramsInput, false);
   });
 
   attachSelectAllOnFocus(servingGramsInput);
