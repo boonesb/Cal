@@ -774,6 +774,47 @@ const fetchEntriesForDate = async (date: string): Promise<Entry[]> => {
   }));
 };
 
+const duplicateEntryToDate = async (entry: Entry, targetDate: string) => {
+  if (!state.user) return;
+  const payload: {
+    foodName: string;
+    entryType?: EntryType;
+    amountMode?: EntryAmountMode;
+    servings: number;
+    consumedGrams?: number;
+    servingSizeGramsSnapshot?: number;
+    caloriesPerServing: number;
+    carbsPerServing: number;
+    proteinPerServing: number;
+    createdAt: ReturnType<typeof serverTimestamp>;
+  } = {
+    foodName: entry.foodName,
+    servings: entry.servings,
+    caloriesPerServing: entry.caloriesPerServing,
+    carbsPerServing: entry.carbsPerServing,
+    proteinPerServing: entry.proteinPerServing,
+    createdAt: serverTimestamp(),
+  };
+
+  if (entry.entryType) {
+    payload.entryType = entry.entryType;
+  }
+  if (entry.amountMode) {
+    payload.amountMode = entry.amountMode;
+  }
+  if (Number.isFinite(entry.consumedGrams) && (entry.consumedGrams ?? 0) > 0) {
+    payload.consumedGrams = Number(entry.consumedGrams);
+  }
+  if (
+    Number.isFinite(entry.servingSizeGramsSnapshot) &&
+    (entry.servingSizeGramsSnapshot ?? 0) > 0
+  ) {
+    payload.servingSizeGramsSnapshot = Number(entry.servingSizeGramsSnapshot);
+  }
+
+  await addDoc(collection(db, 'users', state.user.uid, 'entries', targetDate, 'items'), payload);
+};
+
 const fetchWaterLogsForDate = async (date: string): Promise<WaterLog[]> => {
   if (!state.user) return [];
   const waterCol = collection(db, 'users', state.user.uid, 'waterLogs', date, 'items');
@@ -1802,6 +1843,7 @@ const renderDashboard = async (dateOverride?: string) => {
   if (!entries.length) {
     entriesList.innerHTML = '<p class="small-text">No entries yet for this date.</p>';
   } else {
+    const canCopyToToday = state.selectedDate !== todayStr();
     const rows = entries
       .map((entry) => {
         const calories = entry.servings * entry.caloriesPerServing;
@@ -1825,6 +1867,7 @@ const renderDashboard = async (dateOverride?: string) => {
             ${renderMacroSummary({ calories, carbs, protein, variant: 'compact' })}
           </div>
           <div class="entry-actions">
+            ${canCopyToToday ? `<button class="secondary" data-copy="${entry.id}">Copy to Today</button>` : ''}
             <button class="secondary" data-edit="${entry.id}">Edit</button>
             <button class="ghost icon-button" data-delete="${entry.id}" aria-label="Delete entry">🗑</button>
           </div>
@@ -1834,6 +1877,20 @@ const renderDashboard = async (dateOverride?: string) => {
       .join('');
 
     entriesList.innerHTML = `<ul class="entry-list">${rows}</ul>`;
+
+    entriesList.querySelectorAll<HTMLButtonElement>('button[data-copy]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const entryId = btn.dataset.copy;
+        const entry = entries.find((item) => item.id === entryId);
+        if (!entry) return;
+        const targetDate = todayStr();
+        await duplicateEntryToDate(entry, targetDate);
+        setView('dashboard', { date: targetDate });
+        showToast({
+          message: `Copied ${entry.foodName} to today`,
+        });
+      })
+    );
 
     entriesList.querySelectorAll<HTMLButtonElement>('button[data-edit]').forEach((btn) =>
       btn.addEventListener('click', () => {

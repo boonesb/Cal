@@ -535,6 +535,7 @@ label {
   display: flex;
   gap: 0.4rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .responsive-row {
@@ -620,6 +621,14 @@ label {
 
 .entry-card .entry-actions {
   justify-content: space-between;
+}
+
+.entry-actions .secondary {
+  flex: 1 1 auto;
+}
+
+.entry-actions .icon-button {
+  flex: 0 0 auto;
 }
 
 .chips {
@@ -1520,7 +1529,7 @@ input[aria-invalid='true'] {
   }
 
   .entry-actions .secondary {
-    flex: 1;
+    flex: 1 1 calc(50% - 0.25rem);
   }
 
   .entry-actions .icon-button {
