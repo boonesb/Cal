@@ -3075,7 +3075,7 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
     container: host,
     prefillName: options?.prefillName ?? state.pendingEntryFoodName,
     food: editingFood,
-    onSave: (food) => {
+    onSave: async (food) => {
       state.prefillFoodId = options?.returnDate ? food.id : undefined;
       state.entryReturnContext = options?.returnDate ? { date: options.returnDate } : state.entryReturnContext;
       if (!state.foodCache.find((f) => f.id === food.id)) {
@@ -3086,6 +3086,19 @@ const renderAddFoodView = async (options?: { prefillName?: string; returnDate?: 
       state.pendingEntryFoodName = undefined;
       if (options?.returnDate) {
         setView('add-entry', { date: options.returnDate });
+      } else if (!editingFood) {
+        const addAsEntry = await confirmDialog({
+          title: 'Log for today?',
+          message: 'Would you like to add this as an entry for today?',
+          confirmLabel: 'Add entry',
+          cancelLabel: 'Not now',
+        });
+        if (addAsEntry) {
+          state.prefillFoodId = food.id;
+          setView('add-entry', { date: todayStr() });
+        } else {
+          setView('foods');
+        }
       } else {
         setView('foods');
       }
